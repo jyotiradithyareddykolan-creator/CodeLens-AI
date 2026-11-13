@@ -1,0 +1,185 @@
+import os
+import time
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Tuple
+import httpx
+from jose import jwt
+
+from app.core.config import settings
+
+
+class GitHubServiceError(Exception):
+    """Custom exception raised for GitHub App API communication errors."""
+    pass
+
+
+class GitHubService:
+    def __init__(self):
+        # Cache for installation tokens: {installation_id: (token_str, expiry_epoch)}
+        self._installation_token_cache: Dict[int, Tuple[str, float]] = {}
+
+    def _get_private_key(self) -> Optional[str]:
+        """Resolves the RSA private key from either direct string or file path."""
+        if settings.GITHUB_PRIVATE_KEY:
+            return settings.GITHUB_PRIVATE_KEY
+
+        if settings.GITHUB_PRIVATE_KEY_PATH and os.path.exists(settings.GITHUB_PRIVATE_KEY_PATH):
+            with open(settings.GITHUB_PRIVATE_KEY_PATH, "r", encoding="utf-8") as f:
+                return f.read()
+
+        return None
+
+    def create_app_jwt(self) -> str:
+        """
+        Creates an RS256-signed JWT representing the GitHub App itself.
+        Valid for 10 minutes maximum per GitHub requirements.
+        """
+        app_id = settings.GITHUB_APP_ID
+        private_key = self._get_private_key()
+
+        if not app_id or not private_key:
+            raise GitHubServiceError(
+                "GitHub App credentials missing: GITHUB_APP_ID and GITHUB_PRIVATE_KEY (or GITHUB_PRIVATE_KEY_PATH) must be set."
+            )
+
+        now = int(time.time())
+        payload = {
+            "iat": now - 60,  # 60s in the past to compensate for clock drift
+            "exp": now + (10 * 60),  # 10 minutes
+            "iss": str(app_id),
+        }
+
+        try:
+            return jwt.encode(payload, private_key, algorithm="RS256")
+        except Exception as e:
+            raise GitHubServiceError(f"Failed to generate GitHub App JWT: {str(e)}")
+
+    async def get_installation_access_token(self, installation_id: int) -> str:
+        """
+        Mints or returns a cached short-lived access token for a specific GitHub App installation.
+        """
+        now = time.time()
+        cached = self._installation_token_cache.get(installation_id)
+        if cached:
+            token, expiry = cached
+            # If token still valid for more than 2 minutes, return it
+            if expiry - now > 120:
+                return token
+
+        app_jwt = self.create_app_jwt()
+        url = f"https://api.github.com/app/installations/{installation_id}/access_tokens"
+        headers = {
+            "Authorization": f"Bearer {app_jwt}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            response = await client.post(url, headers=headers)
+            if response.status_code != 201:
+                raise GitHubServiceError(
+                    f"Failed to obtain installation token for installation {installation_id}: "
+                    f"HTTP {response.status_code}"
+                )
+
+            data = response.json()
+            token = data["token"]
+            expires_at_str = data["expires_at"]  # e.g. "2026-11-13T10:00:00Z"
+            
+            # Parse ISO timestamp to epoch
+            try:
+                expiry_dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+                expiry_epoch = expiry_dt.timestamp()
+            except Exception:
+                expiry_epoch = now + 3500  # Default to ~58 minutes
+
+            self._installation_token_cache[installation_id] = (token, expiry_epoch)
+            return token
+
+    async def _make_installation_request(
+        self,
+        installation_id: int,
+        method: str,
+        path: str,
+        headers: Optional[Dict[str, str]] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> httpx.Response:
+        """Makes an authenticated request using the installation's token."""
+        token = await self.get_installation_access_token(installation_id)
+        req_headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if headers:
+            req_headers.update(headers)
+
+        url = f"https://api.github.com{path}"
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            return await client.request(method, url, headers=req_headers, params=params)
+
+    async def list_installation_repositories(self, installation_id: int) -> List[Dict[str, Any]]:
+        """Lists repositories accessible to a specific installation."""
+        response = await self._make_installation_request(
+            installation_id, "GET", "/installation/repositories"
+        )
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch installation repos: {response.text}")
+        data = response.json()
+        return data.get("repositories", [])
+
+    async def get_repository_metadata(self, installation_id: int, owner: str, repo: str) -> Dict[str, Any]:
+        """Fetches repository metadata from GitHub."""
+        response = await self._make_installation_request(
+            installation_id, "GET", f"/repos/{owner}/{repo}"
+        )
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch repository metadata: {response.text}")
+        return response.json()
+
+    async def get_branches(self, installation_id: int, owner: str, repo: str) -> List[Dict[str, Any]]:
+        """Lists branches for a given repository."""
+        response = await self._make_installation_request(
+            installation_id, "GET", f"/repos/{owner}/{repo}/branches"
+        )
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch repository branches: {response.text}")
+        return response.json()
+
+    async def get_pull_request(self, installation_id: int, owner: str, repo: str, pull_number: int) -> Dict[str, Any]:
+        """Fetches Pull Request metadata."""
+        response = await self._make_installation_request(
+            installation_id, "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}"
+        )
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch PR #{pull_number}: {response.text}")
+        return response.json()
+
+    async def get_pull_request_diff(self, installation_id: int, owner: str, repo: str, pull_number: int) -> str:
+        """Retrieves raw Git unified diff for a Pull Request."""
+        headers = {"Accept": "application/vnd.github.v3.diff"}
+        response = await self._make_installation_request(
+            installation_id, "GET", f"/repos/{owner}/{repo}/pulls/{pull_number}", headers=headers
+        )
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch diff for PR #{pull_number}: {response.text}")
+        return response.text
+
+    async def get_file_content(
+        self, installation_id: int, owner: str, repo: str, file_path: str, ref: str
+    ) -> Optional[str]:
+        """Retrieves raw content of a specific file at a given commit/branch ref."""
+        headers = {"Accept": "application/vnd.github.v3.raw"}
+        response = await self._make_installation_request(
+            installation_id, "GET", f"/repos/{owner}/{repo}/contents/{file_path}",
+            params={"ref": ref},
+            headers=headers
+        )
+        if response.status_code == 404:
+            return None
+        if response.status_code != 200:
+            raise GitHubServiceError(f"Failed to fetch file {file_path}: {response.text}")
+        return response.text
+
+
+github_service = GitHubService()
