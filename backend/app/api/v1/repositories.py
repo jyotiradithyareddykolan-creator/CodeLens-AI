@@ -13,6 +13,7 @@ from app.api.v1.github import (
     repository_from_github,
 )
 from app.database.session import get_async_db
+from app.indexing.store import delete_repository_index
 from app.models import (
     GitHubInstallation,
     IndexedFile,
@@ -176,6 +177,7 @@ async def disconnect_repository(
     Removes indexed files, chunks, symbols and reports without touching the GitHub repository.
     """
     repo = await get_owned_repository(db, current_user, repo_id)
+    await delete_repository_index(db, repo.id)
     await db.delete(repo)
     await db.commit()
     return {"status": "disconnected", "repository_id": str(repo_id)}

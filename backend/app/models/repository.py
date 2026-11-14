@@ -47,6 +47,8 @@ class Repository(Base, TimestampMixin):
     pull_requests: Mapped[List["PullRequest"]] = relationship("PullRequest", back_populates="repository", cascade="all, delete-orphan")
     dependencies: Mapped[List["Dependency"]] = relationship("Dependency", back_populates="repository", cascade="all, delete-orphan")
     conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="repository", cascade="all, delete-orphan")
+    chunk_embeddings: Mapped[List["ChunkEmbedding"]] = relationship("ChunkEmbedding", back_populates="repository", cascade="all, delete-orphan")
+    indexing_jobs: Mapped[List["IndexingJob"]] = relationship("IndexingJob", back_populates="repository", cascade="all, delete-orphan", order_by="IndexingJob.created_at")
 
 
 class RepositoryBranch(Base, TimestampMixin):

@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import CodeChunk, GitHubInstallation, IndexedFile, Repository, User
+from app.models import ChunkEmbedding, CodeChunk, GitHubInstallation, IndexedFile, Repository, User
+from app.models.indexing import EMBEDDING_DIMENSIONS
 from tests.test_migrations import alembic_config
 
 POSTGRES_URL = os.environ.get("CODELENS_TEST_POSTGRES_URL")
@@ -60,7 +61,7 @@ def test_postgres_schema_uses_native_uuid_and_pgvector(migrated_postgres):
                 text(
                     "select distinct data_type from information_schema.columns "
                     "where table_schema = 'public' and (column_name = 'id' or column_name like '%\\_id' escape '\\') "
-                    "and column_name not in ('github_id', 'installation_id', 'github_repo_id', 'task_id', 'delivery_id')"
+                    "and column_name not in ('github_id', 'installation_id', 'github_repo_id', 'task_id', 'delivery_id', 'celery_task_id')"
                 )
             ).scalars()
         )
@@ -69,10 +70,10 @@ def test_postgres_schema_uses_native_uuid_and_pgvector(migrated_postgres):
         embedding_type = conn.execute(
             text(
                 "select format_type(atttypid, atttypmod) from pg_attribute "
-                "where attrelid = 'code_chunks'::regclass and attname = 'embedding'"
+                "where attrelid = 'chunk_embeddings'::regclass and attname = 'embedding'"
             )
         ).scalar()
-        assert embedding_type.startswith("vector(")
+        assert embedding_type == f"vector({EMBEDDING_DIMENSIONS})"
     engine.dispose()
 
 
@@ -101,7 +102,13 @@ def _seed(session: Session) -> uuid.UUID:
             end_line=3,
             content="def main():\n    pass\n",
             commit_sha="a" * 40,
-            embedding=[0.1] * 768,
+            embedding_key="e" * 64,
+        )
+    )
+    session.add(
+        ChunkEmbedding(
+            repository_id=repo.id, embedding_key="e" * 64, model="gemini-embedding-2",
+            dimensions=EMBEDDING_DIMENSIONS, embedding=[0.1] * EMBEDDING_DIMENSIONS,
         )
     )
     session.commit()
@@ -139,13 +146,14 @@ async def test_orm_round_trip_with_both_drivers(migrated_postgres):
             chunk = (
                 await session.execute(select(CodeChunk).where(CodeChunk.repository_id == repo_id))
             ).scalar_one()
-            assert len(chunk.embedding) == 768
+            stored = (await session.execute(select(ChunkEmbedding).where(ChunkEmbedding.embedding_key == chunk.embedding_key))).scalar_one()
+            assert len(stored.embedding) == EMBEDDING_DIMENSIONS
 
             # pgvector distance operator works on the stored embedding.
             distance = (
                 await session.execute(
-                    text("select embedding <=> CAST(:q AS vector) from code_chunks limit 1"),
-                    {"q": "[" + ",".join(["0.1"] * 768) + "]"},
+                    text("select embedding <=> CAST(:q AS vector) from chunk_embeddings limit 1"),
+                    {"q": "[" + ",".join(["0.1"] * EMBEDDING_DIMENSIONS) + "]"},
                 )
             ).scalar()
             assert distance == pytest.approx(0.0, abs=1e-6)

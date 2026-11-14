@@ -11,6 +11,7 @@ from app.models import (
     Repository,
     WebhookEvent,
 )
+from app.indexing.store import delete_repository_index
 from app.services.installation_service import upsert_installation_from_webhook
 from app.workers.celery_app import (
     ANALYZE_PULL_REQUEST_TASK_NAME,
@@ -125,6 +126,7 @@ class WebhookService:
                     res = await db.execute(stmt)
                     repo = res.scalar_one_or_none()
                     if repo:
+                        await delete_repository_index(db, repo.id)
                         await db.delete(repo)
                         logger.info(f"Disconnected removed repository {r.get('full_name')}")
 

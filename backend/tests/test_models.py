@@ -118,11 +118,23 @@ async def test_all_17_models_persistence(db_session: AsyncSession):
         end_line=25,
         content="def authenticate_user(): pass",
         commit_sha="a1b2c3d4e5",
-        embedding=[0.1] * 768,
+        embedding_key="k" * 64,
     )
     db_session.add(chunk)
     await db_session.flush()
     assert chunk.id is not None
+
+    # 8b. ChunkEmbedding (vectors live in their own table, keyed by embedding_key)
+    from app.models import ChunkEmbedding
+    from app.models.indexing import EMBEDDING_DIMENSIONS
+
+    stored = ChunkEmbedding(
+        repository_id=repo.id, embedding_key="k" * 64, model="gemini-embedding-2",
+        dimensions=EMBEDDING_DIMENSIONS, embedding=[0.1] * EMBEDDING_DIMENSIONS,
+    )
+    db_session.add(stored)
+    await db_session.flush()
+    assert stored.id is not None
 
     # 9. CodeSymbol
     symbol = CodeSymbol(
