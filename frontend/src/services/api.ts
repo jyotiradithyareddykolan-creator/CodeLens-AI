@@ -92,8 +92,12 @@ export const healthApi = {
     const res = await api.get<SystemHealth>('/health');
     return res.data;
   },
-  getReadiness: async (): Promise<ReadinessCheck> => {
-    const res = await api.get<ReadinessCheck>('/ready');
+  /** Real dependency checks. 503 still carries per-service details, so it is not an error here. */
+  getReadiness: async (details = true): Promise<ReadinessCheck> => {
+    const res = await api.get<ReadinessCheck>('/ready', {
+      params: details ? { details: true } : {},
+      validateStatus: (s) => s === 200 || s === 503,
+    });
     return res.data;
   },
 };

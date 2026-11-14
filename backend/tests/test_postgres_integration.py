@@ -159,3 +159,17 @@ async def test_orm_round_trip_with_both_drivers(migrated_postgres):
             assert distance == pytest.approx(0.0, abs=1e-6)
     finally:
         await async_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_readiness_database_check_reports_pgvector(migrated_postgres):
+    from app.api.v1.health import _check_database
+
+    engine = create_async_engine(async_url(POSTGRES_URL))
+    try:
+        async with async_sessionmaker(engine, class_=AsyncSession)() as session:
+            details = await _check_database(session)
+    finally:
+        await engine.dispose()
+    assert details["engine"] == "postgresql"
+    assert details["vector_extension"]  # e.g. "0.8.7"

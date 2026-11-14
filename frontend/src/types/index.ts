@@ -12,12 +12,30 @@ export interface SystemHealth {
   };
 }
 
+export interface ServiceStatus {
+  status: 'ok' | 'unavailable';
+  /** Present when unavailable: timeout | connection_failed | no_workers | broker_unavailable */
+  reason?: string;
+  latency_ms?: number;
+  engine?: string;
+  vector_extension?: string | null;
+  count?: number;
+}
+
 export interface ReadinessCheck {
   ready: boolean;
   checks: {
     database?: boolean;
     redis?: boolean;
     [key: string]: boolean | undefined;
+  };
+  services?: {
+    database?: ServiceStatus;
+    redis?: ServiceStatus;
+    workers?: ServiceStatus;
+  };
+  features?: {
+    retrieval?: Record<string, 'implemented' | 'planned' | string>;
   };
 }
 

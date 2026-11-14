@@ -1,24 +1,17 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { healthApi, repositoryApi } from '../services/api';
+import { repositoryApi } from '../services/api';
+import { SystemStatusPanel } from '../components/overview/SystemStatusPanel';
 import { useAuth } from '../hooks/useAuth';
 import {
   GitBranch,
   FileCode,
   GitPullRequest,
   AlertTriangle,
-  Layers,
-  Database,
-  Cpu,
   ShieldCheck,
 } from 'lucide-react';
 
 export const OverviewPage: React.FC = () => {
-  const { data: health, isLoading } = useQuery({
-    queryKey: ['system-health'],
-    queryFn: healthApi.getHealth,
-  });
-
   const { isAuthenticated } = useAuth();
   const { data: repositories } = useQuery({
     queryKey: ['repositories'],
@@ -73,41 +66,8 @@ export const OverviewPage: React.FC = () => {
         })}
       </div>
 
-      {/* Platform Health & Backing Services */}
-      <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 space-y-4">
-        <h3 className="text-sm font-semibold text-slate-200 flex items-center gap-2">
-          <Layers className="w-4 h-4 text-blue-400" />
-          <span>Core System Architecture Status</span>
-        </h3>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-          <div className="p-4 rounded-lg bg-slate-950/60 border border-slate-800/80 flex items-center gap-3">
-            <Cpu className="w-5 h-5 text-blue-400" />
-            <div>
-              <p className="font-medium text-slate-300">FastAPI Gateway</p>
-              <p className="text-slate-500 font-mono">
-                {isLoading ? 'Checking...' : health ? `v${health.version} (${health.status})` : 'Offline'}
-              </p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-950/60 border border-slate-800/80 flex items-center gap-3">
-            <Database className="w-5 h-5 text-emerald-400" />
-            <div>
-              <p className="font-medium text-slate-300">PostgreSQL + pgvector</p>
-              <p className="text-slate-500 font-mono">768-dim Vector Hybrid Engine</p>
-            </div>
-          </div>
-
-          <div className="p-4 rounded-lg bg-slate-950/60 border border-slate-800/80 flex items-center gap-3">
-            <Layers className="w-5 h-5 text-purple-400" />
-            <div>
-              <p className="font-medium text-slate-300">Redis & Celery Workers</p>
-              <p className="text-slate-500 font-mono">Async Task Queue</p>
-            </div>
-          </div>
-        </div>
-      </div>
+      {/* Live backend dependency status */}
+      <SystemStatusPanel />
     </div>
   );
 };
