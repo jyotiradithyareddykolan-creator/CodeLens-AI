@@ -275,3 +275,44 @@ async def test_stuck_queued_job_is_resent_once_per_window(client: AsyncClient, d
     assert dispatched == [job.id]  # re-sent once; the re-send restarts the window
     jobs = (await db_session.execute(select(IndexingJob).where(IndexingJob.repository_id == repo.id))).scalars().all()
     assert len(jobs) == 1  # never a duplicate job
+
+
+@pytest.mark.asyncio
+async def test_job_history_is_paginated_newest_first_and_scoped(client: AsyncClient, db_session):
+    from datetime import timedelta
+
+    from app.indexing.jobs import utcnow
+
+    repo, headers = await setup(db_session, 1, 10, 100)
+    other_repo, other_headers = await setup(db_session, 2, 20, 200)
+    base = utcnow() - timedelta(hours=1)
+    jobs = []
+    for i in range(5):
+        job = IndexingJob(repository_id=repo.id, status="succeeded" if i % 2 == 0 else "failed",
+                          commit_sha=f"{i}" * 40, error_message=None if i % 2 == 0 else f"error {i}",
+                          files_total=10 + i, files_changed=i, embeddings_created=i, embeddings_reused=100 - i,
+                          started_at=base + timedelta(minutes=i), finished_at=base + timedelta(minutes=i, seconds=8))
+        db_session.add(job)
+        await db_session.flush()
+        job.created_at = base + timedelta(minutes=i)
+        jobs.append(job)
+    foreign = IndexingJob(repository_id=other_repo.id, status="failed", error_message="not yours")
+    db_session.add(foreign)
+    await db_session.commit()
+
+    page1 = (await client.get(f"/api/repositories/{repo.id}/index/jobs?limit=2", headers=headers)).json()
+    page2 = (await client.get(f"/api/repositories/{repo.id}/index/jobs?limit=2&skip=2", headers=headers)).json()
+    page3 = (await client.get(f"/api/repositories/{repo.id}/index/jobs?limit=2&skip=4", headers=headers)).json()
+    assert [j["commit_sha"][0] for j in page1 + page2 + page3] == ["4", "3", "2", "1", "0"]
+    assert page1[1]["status"] == "failed" and page1[1]["error_message"] == "error 3"
+    assert (page1[0]["files_total"], page1[0]["embeddings_created"], page1[0]["embeddings_reused"]) == (14, 4, 96)
+    assert page1[0]["started_at"] and page1[0]["finished_at"]
+    assert (await client.get(f"/api/repositories/{repo.id}/index/jobs?skip=-1", headers=headers)).status_code == 422
+
+    detail = await client.get(f"/api/repositories/{repo.id}/index/jobs/{jobs[3].id}", headers=headers)
+    assert detail.status_code == 200 and detail.json()["error_message"] == "error 3"
+    # Another user's job is invisible, even through a repository the caller owns.
+    assert (await client.get(f"/api/repositories/{repo.id}/index/jobs/{foreign.id}", headers=headers)).status_code == 404
+    assert (await client.get(f"/api/repositories/{other_repo.id}/index/jobs", headers=headers)).status_code == 404
+    assert (await client.get(f"/api/repositories/{repo.id}/index/jobs/{jobs[0].id}", headers=other_headers)).status_code == 404
+    assert (await client.get(f"/api/repositories/{repo.id}/index/jobs/{jobs[0].id}")).status_code == 401

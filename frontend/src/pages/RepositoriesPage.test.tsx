@@ -26,7 +26,7 @@ vi.mock('../services/api', () => ({
   githubApi: { getInstallations: vi.fn(), getInstallationRepositories: vi.fn() },
   indexingApi: {
     status: api.status, start: api.start, reindex: api.reindex, retry: api.retry, files: api.files,
-    chunks: api.chunks, jobs: vi.fn(),
+    chunks: api.chunks, jobs: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -105,6 +105,8 @@ describe('RepositoriesPage indexing integration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Show indexing details/ }));
     expect((await screen.findByRole('alert')).textContent).toContain('GitHub request failed: HTTP 403');
+    expect(screen.getByRole('region', { name: 'Indexing history' })).toBeTruthy();
+    expect(await screen.findByText('No indexing runs yet.')).toBeTruthy();
   });
 
   it('shows counts, update/reindex actions, files and chunks for an indexed repository', async () => {

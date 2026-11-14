@@ -130,15 +130,33 @@ async def indexing_status(
 async def list_jobs(
     repo_id: uuid.UUID,
     limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0, le=10_000),
+    db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
+):
+    """Newest first. Page with ``skip``/``limit``."""
+    repo = await get_owned_repository(db, current_user, repo_id)
+    rows = (await db.execute(
+        select(IndexingJob).where(IndexingJob.repository_id == repo.id)
+        .order_by(IndexingJob.created_at.desc(), IndexingJob.id.desc()).offset(skip).limit(limit)
+    )).scalars().all()
+    return [IndexingJobResponse.model_validate(j) for j in rows]
+
+
+@router.get("/{repo_id}/index/jobs/{job_id}", response_model=IndexingJobResponse, summary="One indexing job")
+async def get_job(
+    repo_id: uuid.UUID,
+    job_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
     current_user: User = Depends(require_current_user),
 ):
     repo = await get_owned_repository(db, current_user, repo_id)
-    rows = (await db.execute(
-        select(IndexingJob).where(IndexingJob.repository_id == repo.id)
-        .order_by(IndexingJob.created_at.desc()).limit(limit)
-    )).scalars().all()
-    return [IndexingJobResponse.model_validate(j) for j in rows]
+    job = (await db.execute(
+        select(IndexingJob).where(IndexingJob.id == job_id, IndexingJob.repository_id == repo.id)
+    )).scalar_one_or_none()
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Indexing job not found")
+    return IndexingJobResponse.model_validate(job)
 
 
 @router.get("/{repo_id}/index/stats", response_model=IndexingStatsResponse, summary="Indexed content statistics")

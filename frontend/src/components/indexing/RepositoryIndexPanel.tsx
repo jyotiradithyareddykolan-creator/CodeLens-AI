@@ -4,6 +4,7 @@ import { AlertCircle, FileCode, Loader2, Search } from 'lucide-react';
 import { apiErrorMessage, indexingApi } from '../../services/api';
 import { IndexingJob, IndexingStatus } from '../../types';
 import { formatTime, phaseLabel } from './IndexStatusBadge';
+import { JobHistory } from './JobHistory';
 
 const shortSha = (sha?: string | null) => (sha ? sha.slice(0, 10) : '—');
 
@@ -81,6 +82,12 @@ export const RepositoryIndexPanel: React.FC<{ repoId: string; status?: IndexingS
         </p>
       )}
       {job ? <JobSummary job={job} /> : <p className="text-xs text-slate-400">This repository has not been indexed yet.</p>}
+
+      <JobHistory
+        repoId={repoId}
+        hasActiveJob={Boolean(status?.active_job)}
+        refreshKey={`${status?.latest_job?.id ?? ''}:${status?.latest_job?.status ?? ''}`}
+      />
 
       {status?.is_indexed && (
         <div className="grid md:grid-cols-2 gap-3">

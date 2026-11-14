@@ -147,8 +147,12 @@ export const indexingApi = {
     const res = await api.get<IndexingStatus>(`/api/repositories/${repoId}/index/status`);
     return res.data;
   },
-  jobs: async (repoId: string, limit = 10): Promise<IndexingJob[]> => {
-    const res = await api.get<IndexingJob[]>(`/api/repositories/${repoId}/index/jobs`, { params: { limit } });
+  jobs: async (repoId: string, limit = 10, skip = 0): Promise<IndexingJob[]> => {
+    const res = await api.get<IndexingJob[]>(`/api/repositories/${repoId}/index/jobs`, { params: { limit, skip } });
+    return res.data;
+  },
+  job: async (repoId: string, jobId: string): Promise<IndexingJob> => {
+    const res = await api.get<IndexingJob>(`/api/repositories/${repoId}/index/jobs/${jobId}`);
     return res.data;
   },
   files: async (repoId: string, q?: string): Promise<IndexedFileInfo[]> => {
