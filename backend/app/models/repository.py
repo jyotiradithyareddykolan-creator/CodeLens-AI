@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.session import Base
@@ -83,3 +83,7 @@ class Commit(Base, TimestampMixin):
 
     # Relationships
     repository: Mapped["Repository"] = relationship("Repository", back_populates="commits")
+
+    __table_args__ = (
+        Index("ix_commits_repo_sha", "repository_id", "sha"),
+    )

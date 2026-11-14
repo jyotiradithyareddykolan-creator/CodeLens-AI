@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   GitBranch,
@@ -11,57 +11,205 @@ import {
   Loader2,
   Database,
   X,
+  Github,
+  ExternalLink,
+  AlertCircle,
+  CheckCircle2,
 } from 'lucide-react';
-import { repositoryApi, ConnectRepositoryInput } from '../services/api';
+import { apiErrorMessage, githubApi, repositoryApi } from '../services/api';
+import { startGitHubSignIn, useAuth } from '../hooks/useAuth';
 import { Repository } from '../types';
 
-export const RepositoriesPage: React.FC = () => {
+const ConnectRepositoryModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const queryClient = useQueryClient();
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [formData, setFormData] = useState<ConnectRepositoryInput>({
-    github_repo_id: 0,
-    name: '',
-    owner: '',
-    full_name: '',
-    default_branch: 'main',
-    is_private: false,
-    description: '',
-  });
+  const [installationId, setInstallationId] = useState<string>('');
 
-  const { data: repositories, isLoading } = useQuery({
-    queryKey: ['repositories'],
-    queryFn: repositoryApi.getRepositories,
+  const installationsQuery = useQuery({
+    queryKey: ['github-installations'],
+    queryFn: githubApi.getInstallations,
+  });
+  const installations = installationsQuery.data?.installations ?? [];
+
+  useEffect(() => {
+    if (!installationId && installations.length > 0) {
+      setInstallationId(installations[0].id);
+    }
+  }, [installationId, installations]);
+
+  const reposQuery = useQuery({
+    queryKey: ['github-installation-repositories', installationId],
+    queryFn: () => githubApi.getInstallationRepositories(installationId),
+    enabled: Boolean(installationId),
   });
 
   const connectMutation = useMutation({
     mutationFn: repositoryApi.connectRepository,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repositories'] });
-      setIsModalOpen(false);
-      setFormData({
-        github_repo_id: 0,
-        name: '',
-        owner: '',
-        full_name: '',
-        default_branch: 'main',
-        is_private: false,
-        description: '',
-      });
+      queryClient.invalidateQueries({ queryKey: ['github-installation-repositories', installationId] });
     },
+  });
+
+  const installUrl = installationsQuery.data?.install_url;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
+      <div className="w-full max-w-lg rounded-xl bg-slate-900 border border-slate-800 shadow-2xl p-6 space-y-5">
+        <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+          <h3 className="text-base font-bold text-white flex items-center gap-2">
+            <Database className="w-4 h-4 text-blue-400" />
+            <span>Connect GitHub Repository</span>
+          </h3>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-200" title="Close">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {installationsQuery.isLoading ? (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> Loading GitHub App installations...
+          </div>
+        ) : installationsQuery.isError ? (
+          <p className="text-xs text-amber-400">{apiErrorMessage(installationsQuery.error)}</p>
+        ) : installations.length === 0 ? (
+          <div className="space-y-3 text-xs text-slate-300">
+            <p>
+              No GitHub App installations are linked to your account yet. Install the CodeLens GitHub
+              App on your account or organization and choose which repositories it may read.
+            </p>
+            {installUrl ? (
+              <a
+                href={installUrl}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition"
+              >
+                <Github className="w-3.5 h-3.5" /> Install GitHub App <ExternalLink className="w-3 h-3" />
+              </a>
+            ) : (
+              <p className="text-slate-500">
+                The install link is unavailable because GITHUB_APP_SLUG is not configured on the backend.
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-4 text-xs">
+            <div className="space-y-1">
+              <label htmlFor="installation" className="text-slate-300 font-medium">
+                GitHub account
+              </label>
+              <select
+                id="installation"
+                value={installationId}
+                onChange={(e) => setInstallationId(e.target.value)}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500"
+              >
+                {installations.map((inst) => (
+                  <option key={inst.id} value={inst.id}>
+                    {inst.account_login} ({inst.account_type})
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto rounded-lg border border-slate-800 divide-y divide-slate-800/60">
+              {reposQuery.isLoading ? (
+                <div className="p-4 flex items-center gap-2 text-slate-400">
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-500" /> Loading repositories from GitHub...
+                </div>
+              ) : reposQuery.isError ? (
+                <p className="p-4 text-amber-400">{apiErrorMessage(reposQuery.error)}</p>
+              ) : (reposQuery.data ?? []).length === 0 ? (
+                <p className="p-4 text-slate-400">
+                  This installation has no repositories granted. Update the App's repository access on GitHub.
+                </p>
+              ) : (
+                (reposQuery.data ?? []).map((repo) => {
+                  const pending =
+                    connectMutation.isPending &&
+                    connectMutation.variables?.github_repo_id === repo.github_repo_id;
+                  return (
+                    <div key={repo.github_repo_id} className="p-3 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium text-slate-100 flex items-center gap-1.5">
+                          {repo.is_private ? (
+                            <Lock className="w-3 h-3 text-amber-400" />
+                          ) : (
+                            <Globe className="w-3 h-3 text-slate-400" />
+                          )}
+                          <span className="truncate">{repo.full_name}</span>
+                        </div>
+                        {repo.description && (
+                          <p className="text-[11px] text-slate-400 truncate">{repo.description}</p>
+                        )}
+                      </div>
+                      {repo.connected_repository_id ? (
+                        <span className="flex items-center gap-1 text-emerald-400 shrink-0">
+                          <CheckCircle2 className="w-3.5 h-3.5" /> Connected
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            connectMutation.mutate({
+                              installation_id: installationId,
+                              github_repo_id: repo.github_repo_id,
+                            })
+                          }
+                          disabled={connectMutation.isPending}
+                          className="shrink-0 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition flex items-center gap-1.5 disabled:opacity-60"
+                        >
+                          {pending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                          <span>Connect</span>
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {connectMutation.isError && (
+              <p className="text-amber-400 flex items-center gap-1.5">
+                <AlertCircle className="w-3.5 h-3.5" /> {apiErrorMessage(connectMutation.error)}
+              </p>
+            )}
+            {installUrl && (
+              <a href={installUrl} className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300">
+                Install on another account or change repository access <ExternalLink className="w-3 h-3" />
+              </a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export const RepositoriesPage: React.FC = () => {
+  const queryClient = useQueryClient();
+  const { isAuthenticated, isLoading: authLoading } = useAuth();
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  const { data: repositories, isLoading, isError, error } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: repositoryApi.getRepositories,
+    enabled: isAuthenticated,
   });
 
   const disconnectMutation = useMutation({
     mutationFn: repositoryApi.disconnectRepository,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repositories'] });
+      queryClient.invalidateQueries({ queryKey: ['github-installation-repositories'] });
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formData.name || !formData.owner) return;
-    const full_name = `${formData.owner}/${formData.name}`;
-    connectMutation.mutate({ ...formData, full_name });
+  const handleSignIn = async () => {
+    setSignInError(null);
+    try {
+      await startGitHubSignIn();
+    } catch (err) {
+      setSignInError(apiErrorMessage(err, 'Sign-in is unavailable.'));
+    }
   };
 
   return (
@@ -74,13 +222,15 @@ export const RepositoriesPage: React.FC = () => {
             Manage synchronized GitHub repositories, track AST indexing state, and review symbols.
           </p>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition shadow-lg shadow-blue-500/20"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Connect Repository</span>
-        </button>
+        {isAuthenticated && (
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium text-xs transition shadow-lg shadow-blue-500/20"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Connect Repository</span>
+          </button>
+        )}
       </div>
 
       {/* Safety Notice */}
@@ -93,11 +243,34 @@ export const RepositoriesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Repositories Table / List */}
-      {isLoading ? (
+      {authLoading || (isAuthenticated && isLoading) ? (
         <div className="p-12 text-center rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center gap-2 text-slate-400 text-sm">
           <Loader2 className="w-5 h-5 animate-spin text-blue-500" />
           <span>Loading repositories...</span>
+        </div>
+      ) : !isAuthenticated ? (
+        <div className="p-12 text-center rounded-xl bg-slate-900 border border-slate-800 space-y-4">
+          <div className="w-12 h-12 mx-auto rounded-full bg-slate-800 flex items-center justify-center text-slate-400">
+            <Github className="w-6 h-6" />
+          </div>
+          <div className="max-w-md mx-auto space-y-1">
+            <h3 className="text-base font-semibold text-slate-200">Sign in to manage repositories</h3>
+            <p className="text-xs text-slate-400">
+              Sign in with GitHub to see the repositories your CodeLens GitHub App installations can read.
+            </p>
+          </div>
+          <button
+            onClick={handleSignIn}
+            className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition inline-flex items-center gap-2"
+          >
+            <Github className="w-4 h-4" />
+            <span>Sign in with GitHub</span>
+          </button>
+          {signInError && <p className="text-xs text-amber-400">{signInError}</p>}
+        </div>
+      ) : isError ? (
+        <div className="p-6 rounded-xl bg-slate-900 border border-slate-800 text-xs text-amber-400 flex items-center gap-2">
+          <AlertCircle className="w-4 h-4" /> {apiErrorMessage(error)}
         </div>
       ) : repositories && repositories.length > 0 ? (
         <div className="rounded-xl bg-slate-900 border border-slate-800 overflow-hidden">
@@ -159,7 +332,11 @@ export const RepositoriesPage: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 text-right">
                       <button
-                        onClick={() => disconnectMutation.mutate(repo.id)}
+                        onClick={() => {
+                          if (window.confirm(`Disconnect ${repo.full_name}? Indexed data in CodeLens will be deleted. The GitHub repository is not affected.`)) {
+                            disconnectMutation.mutate(repo.id);
+                          }
+                        }}
                         disabled={disconnectMutation.isPending}
                         title="Disconnect repository"
                         className="p-1.5 rounded-md hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 transition"
@@ -194,107 +371,7 @@ export const RepositoriesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Connect Modal */}
-      {isModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-          <div className="w-full max-w-md rounded-xl bg-slate-900 border border-slate-800 shadow-2xl p-6 space-y-5 animate-in fade-in zoom-in-95">
-            <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Database className="w-4 h-4 text-blue-400" />
-                <span>Connect GitHub Repository</span>
-              </h3>
-              <button
-                onClick={() => setIsModalOpen(false)}
-                className="text-slate-400 hover:text-slate-200"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSubmit} className="space-y-4 text-xs">
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">Repository Owner / Org</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. facebook, octocat, or my-org"
-                  value={formData.owner}
-                  onChange={(e) => setFormData({ ...formData, owner: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500 transition"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">Repository Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. react, ai_code_analyzer"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500 transition"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">Default Branch</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="main"
-                  value={formData.default_branch}
-                  onChange={(e) => setFormData({ ...formData, default_branch: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500 transition"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <label className="text-slate-300 font-medium">Description (Optional)</label>
-                <textarea
-                  rows={2}
-                  placeholder="Brief description of the service"
-                  value={formData.description}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-200 focus:outline-none focus:border-blue-500 transition"
-                />
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="is_private"
-                  checked={formData.is_private}
-                  onChange={(e) => setFormData({ ...formData, is_private: e.target.checked })}
-                  className="rounded border-slate-800 text-blue-600 focus:ring-0 bg-slate-950"
-                />
-                <label htmlFor="is_private" className="text-slate-300">
-                  Private Repository
-                </label>
-              </div>
-
-              <div className="pt-2 flex justify-between items-center">
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setIsModalOpen(false)}
-                    className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 transition"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={connectMutation.isPending}
-                    className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-medium transition flex items-center gap-1.5"
-                  >
-                    {connectMutation.isPending && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                    <span>Connect</span>
-                  </button>
-                </div>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {isModalOpen && isAuthenticated && <ConnectRepositoryModal onClose={() => setIsModalOpen(false)} />}
     </div>
   );
 };

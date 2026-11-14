@@ -1,6 +1,8 @@
 from typing import List, Optional
-from pydantic import AnyHttpUrl, field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+INSECURE_DEFAULT_SECRET_KEY = "default-insecure-development-secret-key-32-chars-minimum"
 
 
 class Settings(BaseSettings):
@@ -8,7 +10,9 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="ignore"
+        extra="ignore",
+        # Validation errors must never echo configuration values (they include secrets).
+        hide_input_in_errors=True,
     )
 
     # Project metadata
@@ -17,10 +21,17 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
+    # SQL statement logging is opt-in: bound parameters can contain sensitive data.
+    DATABASE_ECHO: bool = False
+
+    # Public URLs used to build OAuth redirects
+    FRONTEND_URL: str = "http://localhost:5173"
+    BACKEND_URL: str = "http://localhost:8000"
 
     # Security
-    SECRET_KEY: str = "default-insecure-development-secret-key-32-chars-minimum"
+    SECRET_KEY: str = INSECURE_DEFAULT_SECRET_KEY
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7 days
+    OAUTH_STATE_EXPIRE_SECONDS: int = 600
 
     # CORS
     BACKEND_CORS_ORIGINS: List[str] = [
@@ -80,6 +91,8 @@ class Settings(BaseSettings):
 
     # GitHub App Integration
     GITHUB_APP_ID: Optional[str] = None
+    # Public slug of the GitHub App (github.com/apps/<slug>), used for the install link
+    GITHUB_APP_SLUG: Optional[str] = None
     GITHUB_CLIENT_ID: Optional[str] = None
     GITHUB_CLIENT_SECRET: Optional[str] = None
     GITHUB_WEBHOOK_SECRET: Optional[str] = None
@@ -90,6 +103,31 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE_BYTES: int = 1024 * 1024  # 1 MB
     CHUNK_MAX_TOKENS: int = 500
     CHUNK_OVERLAP_TOKENS: int = 50
+
+    @field_validator("FRONTEND_URL", "BACKEND_URL")
+    @classmethod
+    def strip_trailing_slash(cls, v: str) -> str:
+        return v.rstrip("/")
+
+    @model_validator(mode="after")
+    def enforce_production_safety(self) -> "Settings":
+        """Refuse to start in production with development-grade security settings."""
+        if self.ENVIRONMENT != "production":
+            return self
+        problems = []
+        if self.SECRET_KEY == INSECURE_DEFAULT_SECRET_KEY or len(self.SECRET_KEY) < 32:
+            problems.append("SECRET_KEY must be set to a random value of at least 32 characters")
+        if self.SECRET_KEY.startswith("replace-with"):
+            problems.append("SECRET_KEY still contains the .env.example placeholder")
+        if self.DEBUG:
+            problems.append("DEBUG must be false")
+        if self.DATABASE_ECHO:
+            problems.append("DATABASE_ECHO must be false")
+        if not self.GITHUB_WEBHOOK_SECRET:
+            problems.append("GITHUB_WEBHOOK_SECRET must be set")
+        if problems:
+            raise ValueError("Unsafe production configuration: " + "; ".join(problems))
+        return self
 
 
 settings = Settings()

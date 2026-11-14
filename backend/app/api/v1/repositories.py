@@ -1,122 +1,157 @@
 import uuid
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.v1.auth import require_current_user
+from app.api.v1.github import (
+    get_owned_installation,
+    github_upstream_error,
+    repository_from_github,
+)
 from app.database.session import get_async_db
 from app.models import (
     GitHubInstallation,
     IndexedFile,
     Repository,
     RepositoryBranch,
+    User,
 )
 from app.schemas.repository import RepositoryResponse
-from app.services.github_service import github_service
+from app.services.github_service import GitHubServiceError, github_service
 
-router = APIRouter(prefix="/repositories", tags=["Repositories"])
+# Every endpoint here requires a signed-in user and only sees repositories that belong
+# to that user's GitHub App installations.
+router = APIRouter(
+    prefix="/repositories",
+    tags=["Repositories"],
+    dependencies=[Depends(require_current_user)],
+)
 
 
 class ConnectRepositoryRequest(BaseModel):
-    github_repo_id: int
-    full_name: str
-    name: str
-    owner: str
-    default_branch: str = "main"
-    is_private: bool = False
-    html_url: Optional[str] = None
-    description: Optional[str] = None
-    installation_id: Optional[uuid.UUID] = None
+    """Connect a repository granted to one of the user's GitHub App installations.
+
+    Repository metadata (name, owner, default branch, visibility) is fetched from GitHub
+    rather than trusted from the client.
+    """
+
+    installation_id: uuid.UUID
+    github_repo_id: int = Field(..., gt=0)
+
+
+async def get_owned_repository(
+    db: AsyncSession, user: User, repo_id: uuid.UUID
+) -> Repository:
+    """Return the repository if it belongs to one of ``user``'s installations, else 404."""
+    result = await db.execute(
+        select(Repository)
+        .join(GitHubInstallation, Repository.installation_id == GitHubInstallation.id)
+        .where(Repository.id == repo_id, GitHubInstallation.user_id == user.id)
+    )
+    repo = result.scalar_one_or_none()
+    if repo is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Repository not found")
+    return repo
 
 
 @router.get("", response_model=List[RepositoryResponse], summary="List Connected Repositories")
 async def list_repositories(
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=100),
 ):
-    """Lists all connected GitHub repositories in CodeLens AI."""
+    """Lists the current user's connected GitHub repositories."""
     stmt = (
         select(Repository)
+        .join(GitHubInstallation, Repository.installation_id == GitHubInstallation.id)
+        .where(GitHubInstallation.user_id == current_user.id)
         .order_by(Repository.created_at.desc())
         .offset(skip)
         .limit(limit)
     )
     result = await db.execute(stmt)
-    repos = result.scalars().all()
-    return repos
+    return result.scalars().all()
 
 
-@router.post("/connect", response_model=RepositoryResponse, status_code=status.HTTP_201_CREATED, summary="Connect Repository")
+@router.post(
+    "/connect",
+    response_model=RepositoryResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Connect Repository",
+)
 async def connect_repository(
     payload: ConnectRepositoryRequest,
+    response: Response,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
 ):
     """
     Connects a GitHub repository to CodeLens AI for indexing and PR analysis.
-    Initially establishes read-only integration.
+    Access is read-only; CodeLens never writes to the repository.
     """
-    # 1. Check if repository is already connected
-    stmt = select(Repository).where(Repository.github_repo_id == payload.github_repo_id)
-    result = await db.execute(stmt)
+    installation = await get_owned_installation(db, current_user, payload.installation_id)
+
+    # Already connected? Return it (200) if it is under this installation.
+    result = await db.execute(
+        select(Repository).where(Repository.github_repo_id == payload.github_repo_id)
+    )
     existing = result.scalar_one_or_none()
-    if existing:
+    if existing is not None:
+        if existing.installation_id != installation.id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This repository is already connected through another installation.",
+            )
+        response.status_code = status.HTTP_200_OK
         return existing
 
-    # 2. Find or establish default installation if not explicitly passed
-    installation_id = payload.installation_id
-    if installation_id:
-        installation_stmt = select(GitHubInstallation).where(
-            GitHubInstallation.id == installation_id
+    # The installation token can only see repositories granted to the installation,
+    # so a successful lookup proves this installation may access the repository.
+    try:
+        github_repo = await github_service.get_repository_by_id(
+            installation.installation_id, payload.github_repo_id
         )
-        installation_result = await db.execute(installation_stmt)
-        if not installation_result.scalar_one_or_none():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="The supplied GitHub App installation_id does not exist.",
-            )
-    else:
-        inst_stmt = select(GitHubInstallation).limit(1)
-        inst_res = await db.execute(inst_stmt)
-        default_inst = inst_res.scalar_one_or_none()
+    except GitHubServiceError as exc:
+        raise github_upstream_error(exc)
 
-        if not default_inst:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="A valid GitHub App installation_id is required to connect a repository.",
-            )
+    fields = repository_from_github(github_repo) if github_repo else None
+    if fields is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Repository is not accessible to this GitHub App installation.",
+        )
 
-        installation_id = default_inst.id
-
-    # 3. Create repository record
     new_repo = Repository(
-        installation_id=installation_id,
-        github_repo_id=payload.github_repo_id,
-        name=payload.name,
-        owner=payload.owner,
-        full_name=payload.full_name,
-        default_branch=payload.default_branch,
-        is_private=payload.is_private,
-        html_url=payload.html_url or f"https://github.com/{payload.full_name}",
-        description=payload.description,
+        installation_id=installation.id,
+        github_repo_id=fields["github_repo_id"],
+        name=fields["name"],
+        owner=fields["owner"],
+        full_name=fields["full_name"],
+        default_branch=fields["default_branch"],
+        is_private=fields["is_private"],
+        html_url=fields["html_url"] or f"https://github.com/{fields['full_name']}",
+        description=fields["description"],
         is_indexed=False,
         indexing_status="unindexed",
     )
     db.add(new_repo)
     await db.flush()
 
-    # 4. Create default branch record
-    default_branch_record = RepositoryBranch(
-        repository_id=new_repo.id,
-        name=payload.default_branch,
-        is_default=True,
+    db.add(
+        RepositoryBranch(
+            repository_id=new_repo.id,
+            name=fields["default_branch"],
+            is_default=True,
+        )
     )
-    db.add(default_branch_record)
 
     await db.commit()
     await db.refresh(new_repo)
-
     return new_repo
 
 
@@ -124,40 +159,25 @@ async def connect_repository(
 async def get_repository_details(
     repo_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
 ):
     """Retrieves repository metadata, indexing state, and summary statistics."""
-    stmt = select(Repository).where(Repository.id == repo_id)
-    result = await db.execute(stmt)
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repository not found",
-        )
-    return repo
+    return await get_owned_repository(db, current_user, repo_id)
 
 
 @router.delete("/{repo_id}", status_code=status.HTTP_200_OK, summary="Disconnect Repository")
 async def disconnect_repository(
     repo_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
 ):
     """
     Disconnects a repository from CodeLens AI.
-    Removes indexed files, chunks, AST symbols, and reports without touching the GitHub repository.
+    Removes indexed files, chunks, symbols and reports without touching the GitHub repository.
     """
-    stmt = select(Repository).where(Repository.id == repo_id)
-    result = await db.execute(stmt)
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repository not found",
-        )
-
+    repo = await get_owned_repository(db, current_user, repo_id)
     await db.delete(repo)
     await db.commit()
-
     return {"status": "disconnected", "repository_id": str(repo_id)}
 
 
@@ -165,17 +185,10 @@ async def disconnect_repository(
 async def get_repository_status(
     repo_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
 ):
     """Returns indexing state, total files, and last indexed commit."""
-    stmt = select(Repository).where(Repository.id == repo_id)
-    result = await db.execute(stmt)
-    repo = result.scalar_one_or_none()
-    if not repo:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Repository not found",
-        )
-
+    repo = await get_owned_repository(db, current_user, repo_id)
     return {
         "repository_id": str(repo.id),
         "is_indexed": repo.is_indexed,
@@ -191,30 +204,42 @@ async def get_repository_status(
 async def get_repository_branches(
     repo_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
 ):
     """Returns tracked branches for a repository."""
-    stmt = select(RepositoryBranch).where(RepositoryBranch.repository_id == repo_id)
-    result = await db.execute(stmt)
-    branches = result.scalars().all()
-    return branches
+    await get_owned_repository(db, current_user, repo_id)
+    result = await db.execute(
+        select(RepositoryBranch).where(RepositoryBranch.repository_id == repo_id)
+    )
+    return [
+        {
+            "id": str(b.id),
+            "name": b.name,
+            "latest_commit_sha": b.latest_commit_sha,
+            "is_default": b.is_default,
+        }
+        for b in result.scalars().all()
+    ]
 
 
 @router.get("/{repo_id}/files", summary="List Indexed Repository Files")
 async def get_repository_files(
     repo_id: uuid.UUID,
     db: AsyncSession = Depends(get_async_db),
+    current_user: User = Depends(require_current_user),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
 ):
     """Returns indexed files for code browsing."""
+    await get_owned_repository(db, current_user, repo_id)
     stmt = (
         select(IndexedFile)
-        .where(IndexedFile.repository_id == repo_id, IndexedFile.is_deleted == False)
+        .where(IndexedFile.repository_id == repo_id, IndexedFile.is_deleted.is_(False))
+        .order_by(IndexedFile.file_path)
         .offset(skip)
         .limit(limit)
     )
     result = await db.execute(stmt)
-    files = result.scalars().all()
     return [
         {
             "id": str(f.id),
@@ -222,5 +247,5 @@ async def get_repository_files(
             "language": f.language,
             "size_bytes": f.size_bytes,
         }
-        for f in files
+        for f in result.scalars().all()
     ]

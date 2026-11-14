@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,22 +8,17 @@ from app.api.v1.api import api_router
 from app.api.v1.health import health_check, readiness_check
 from app.core.config import settings
 
+logger = logging.getLogger("app")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup actions
-    print(f"[STARTUP] Starting {settings.PROJECT_NAME} v{settings.VERSION} [{settings.ENVIRONMENT}]")
-    try:
-        from app.database.session import async_engine, Base
-        import app.models  # ensure all models are imported
-        async with async_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        print("[STARTUP] Database tables verified & initialized.")
-    except Exception as e:
-        print(f"[STARTUP] Database initialization notice: {e}")
+    # The schema is owned by Alembic: run `alembic upgrade head` before starting the API
+    # (docker-compose does this automatically). Tables are intentionally not created here.
+    logger.info("Starting %s v%s [%s]", settings.PROJECT_NAME, settings.VERSION, settings.ENVIRONMENT)
     yield
-    # Shutdown actions
-    print(f"[SHUTDOWN] Shutting down {settings.PROJECT_NAME}")
+    logger.info("Shutting down %s", settings.PROJECT_NAME)
 
 
 app = FastAPI(

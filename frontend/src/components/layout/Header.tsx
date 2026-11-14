@@ -1,9 +1,25 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { healthApi } from '../../services/api';
-import { Activity, Github, CheckCircle2, AlertCircle } from 'lucide-react';
+import { apiErrorMessage, authApi, healthApi } from '../../services/api';
+import { startGitHubSignIn, useAuth } from '../../hooks/useAuth';
+import { Activity, Github, CheckCircle2, AlertCircle, LogOut } from 'lucide-react';
 
 export const Header: React.FC = () => {
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const [signingIn, setSigningIn] = useState(false);
+  const [signInError, setSignInError] = useState<string | null>(null);
+
+  const handleSignIn = async () => {
+    setSignInError(null);
+    setSigningIn(true);
+    try {
+      await startGitHubSignIn();
+    } catch (err) {
+      setSigningIn(false);
+      setSignInError(apiErrorMessage(err, 'Sign-in is unavailable.'));
+    }
+  };
+
   const { isSuccess, isError } = useQuery({
     queryKey: ['system-health'],
     queryFn: healthApi.getHealth,
@@ -35,13 +51,38 @@ export const Header: React.FC = () => {
           )}
         </div>
 
-        {/* GitHub App Account Pill */}
+        {/* GitHub Account */}
         <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
-          <button className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition">
-            <Github className="w-3.5 h-3.5" />
-            <span>GitHub Connect</span>
-          </button>
+          {isAuthenticated && user ? (
+            <>
+              <span className="flex items-center gap-2 text-xs text-slate-300">
+                {user.avatar_url ? (
+                  <img src={user.avatar_url} alt="" className="w-6 h-6 rounded-full" />
+                ) : (
+                  <Github className="w-3.5 h-3.5" />
+                )}
+                <span className="font-medium">{user.username}</span>
+              </span>
+              <button
+                onClick={() => authApi.logout()}
+                title="Sign out"
+                className="p-1.5 rounded-md text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={handleSignIn}
+              disabled={isLoading || signingIn}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition disabled:opacity-60"
+            >
+              <Github className="w-3.5 h-3.5" />
+              <span>{signingIn ? 'Redirecting...' : 'Sign in with GitHub'}</span>
+            </button>
+          )}
         </div>
+        {signInError && <span className="text-[11px] text-amber-400">{signInError}</span>}
       </div>
     </header>
   );

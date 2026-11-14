@@ -17,7 +17,7 @@ is_async_sqlite = "sqlite" in settings.ASYNC_DATABASE_URL.lower()
 # Sync Engine & Session Factory (for Alembic, Celery, sync scripts)
 sync_engine = create_engine(
     settings.DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=settings.DATABASE_ECHO,
     pool_pre_ping=not is_sync_sqlite,
     connect_args={"check_same_thread": False} if is_sync_sqlite else {},
 )
@@ -27,7 +27,7 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=sync_engine)
 # Async Engine & Session Factory (for FastAPI endpoints)
 async_engine = create_async_engine(
     settings.ASYNC_DATABASE_URL,
-    echo=settings.DEBUG,
+    echo=settings.DATABASE_ECHO,
     future=True,
     pool_pre_ping=not is_async_sqlite,
     connect_args={"check_same_thread": False} if is_async_sqlite else {},

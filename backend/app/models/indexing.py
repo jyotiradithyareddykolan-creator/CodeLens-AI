@@ -82,6 +82,10 @@ class CodeSymbol(Base, TimestampMixin):
     # Relationships
     file: Mapped["IndexedFile"] = relationship("IndexedFile", back_populates="symbols")
 
+    __table_args__ = (
+        Index("ix_code_symbols_file_name", "file_id", "name"),
+    )
+
 
 class Dependency(Base, TimestampMixin):
     __tablename__ = "dependencies"

@@ -124,16 +124,64 @@ npm install
 npm run dev
 ```
 
+#### Live PostgreSQL tests (optional)
+The default test suite uses SQLite. To also run migrations, type checks and pgvector
+queries against real PostgreSQL, start the database (`docker compose up -d db`), create a
+**disposable** database, and point the tests at it. These tests drop and recreate every
+table in that database, so never use your development database.
+```bash
+docker exec codelens_db createdb -U postgres codelens_test
+CODELENS_TEST_POSTGRES_URL=postgresql+psycopg://postgres:postgres@localhost:5432/codelens_test pytest tests -v
+```
+(In PowerShell: `$env:CODELENS_TEST_POSTGRES_URL="postgresql+psycopg://..."` then `pytest`.)
+
+> **Database schema is managed only by Alembic.** The API no longer creates tables at
+> startup; always run `alembic upgrade head` first (Docker Compose does this for you).
+> If you have an older local SQLite file that was created automatically by a previous
+> version (it has tables but no `alembic_version` table), either delete it and run
+> `alembic upgrade head`, or mark it as current with `alembic stamp head`.
+
 ---
 
-## Current Status: Phase 1 (Foundation) Complete
+## GitHub App setup
 
-- [x] Initialized Vite + React + TypeScript + Tailwind frontend skeleton.
-- [x] Initialized FastAPI backend with async SQLAlchemy 2.0 & Pydantic v2.
-- [x] Implemented all 17 database models with pgvector 768-dim embedding column.
-- [x] Configured Alembic with pgvector extension initialization.
-- [x] Configured Celery worker application with Redis broker and diagnostic ping task.
-- [x] Built multi-container Docker Compose file (`db`, `redis`, `backend`, `celery_worker`, `frontend`).
-- [x] Implemented `/health` and `/ready` endpoints.
-- [x] Built and verified pytest suite (all 6 tests passing).
-- [x] Successfully compiled frontend with `npm run build`.
+CodeLens uses a single **GitHub App** for both sign-in and repository access. Repository
+access is read-only.
+
+1. Create a GitHub App (GitHub → Settings → Developer settings → GitHub Apps → New).
+2. **Repository permissions** (read-only): *Contents: Read*, *Metadata: Read*,
+   *Pull requests: Read*. Do not grant any write permission.
+3. **Subscribe to events**: *Installation*, *Installation repositories*, *Push*, *Pull request*.
+4. **Webhook URL**: `<BACKEND_URL>/api/v1/webhooks/github`, with a random **Webhook secret**.
+   For local development, expose the backend with a tunnel.
+5. **Callback URL**: `<BACKEND_URL>/api/v1/auth/callback`.
+6. **Setup URL** (optional, recommended): `<BACKEND_URL>/api/v1/auth/github/login`, with
+   *Redirect on update* enabled. Leave *Request user authorization (OAuth) during
+   installation* **unchecked**: CodeLens starts its own sign-in, which carries the
+   anti-CSRF `state` parameter that GitHub's install-time authorization omits.
+7. Generate a private key, then fill in `.env`: `GITHUB_APP_ID`, `GITHUB_APP_SLUG`,
+   `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` (the App's own client credentials),
+   `GITHUB_WEBHOOK_SECRET`, and `GITHUB_PRIVATE_KEY_PATH` (or `GITHUB_PRIVATE_KEY`).
+
+**Flow:** *Sign in with GitHub* → CodeLens lists the App installations you can access
+(`GET /user/installations`) and links them to your account → *Connect Repository* lists
+the repositories each installation was granted → connecting fetches the repository's
+metadata from GitHub. The GitHub user token is used only during sign-in and is not
+stored. Installations created while you are already a CodeLens user are also linked
+from the `installation` webhook.
+
+**Known limitation:** an installation belongs to the first CodeLens user who links it.
+Other members of the same organization do not see it yet.
+
+---
+
+## Current Status
+
+**Phase 1 (Foundation)** and **Phase 2 (GitHub integration)** are in place, including
+Milestone 0 stabilization: GitHub App installation linking, server-verified repository
+connection, authenticated and user-scoped repository APIs, OAuth `state` protection,
+production configuration guards, and migrations reconciled with the models (guarded by
+an `alembic check` test).
+
+**Next: Phase 3 (Repository indexing engine).** Indexing, parsing, embeddings,
+search, PR analysis and impact analysis are not implemented yet.
