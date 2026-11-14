@@ -112,8 +112,29 @@ class Settings(BaseSettings):
 
     # Processing Limits
     MAX_FILE_SIZE_BYTES: int = 1024 * 1024  # 1 MB
+    # Upper bound (estimated tokens) for a chunk's content plus its context header.
+    # Must stay well below the embedding model's per-text input limit (2,048 for
+    # gemini-embedding-001).
     CHUNK_MAX_TOKENS: int = 500
+    # Not used by the syntax-aware chunker: split parts carry their enclosing
+    # signatures as structured context instead of duplicated source text.
     CHUNK_OVERLAP_TOKENS: int = 50
+    # Calibration factor for app.indexing.tokens.estimate_tokens (tuned in Milestone 4).
+    CHUNK_TOKEN_ESTIMATE_MULTIPLIER: float = 1.0
+
+    @field_validator("CHUNK_MAX_TOKENS")
+    @classmethod
+    def chunk_size_in_range(cls, v: int) -> int:
+        if not 64 <= v <= 2048:
+            raise ValueError("CHUNK_MAX_TOKENS must be between 64 and 2048")
+        return v
+
+    @field_validator("CHUNK_TOKEN_ESTIMATE_MULTIPLIER")
+    @classmethod
+    def multiplier_in_range(cls, v: float) -> float:
+        if not 0.5 <= v <= 4.0:
+            raise ValueError("CHUNK_TOKEN_ESTIMATE_MULTIPLIER must be between 0.5 and 4.0")
+        return v
 
     @field_validator("FRONTEND_URL", "BACKEND_URL")
     @classmethod
