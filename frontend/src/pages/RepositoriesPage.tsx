@@ -1,9 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  GitBranch,
   Plus,
-  Trash2,
   FolderSearch,
   ShieldCheck,
   Lock,
@@ -19,6 +17,7 @@ import {
 import { apiErrorMessage, githubApi, repositoryApi } from '../services/api';
 import { startGitHubSignIn, useAuth } from '../hooks/useAuth';
 import { Repository } from '../types';
+import { RepositoryRow } from '../components/indexing/RepositoryRow';
 
 const ConnectRepositoryModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const queryClient = useQueryClient();
@@ -219,7 +218,7 @@ export const RepositoriesPage: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-white tracking-tight">Connected Repositories</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Manage synchronized GitHub repositories, track AST indexing state, and review symbols.
+            Connect GitHub repositories, index their source code, and track indexing progress.
           </p>
         </div>
         {isAuthenticated && (
@@ -288,63 +287,16 @@ export const RepositoriesPage: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-800/60 text-slate-300">
                 {repositories.map((repo: Repository) => (
-                  <tr key={repo.id} className="hover:bg-slate-800/40 transition">
-                    <td className="py-3 px-4">
-                      <div className="font-semibold text-slate-100 flex items-center gap-2">
-                        <GitBranch className="w-4 h-4 text-blue-400" />
-                        <span>{repo.full_name}</span>
-                      </div>
-                      {repo.description && (
-                        <p className="text-[11px] text-slate-400 truncate max-w-sm mt-0.5">
-                          {repo.description}
-                        </p>
-                      )}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="font-mono bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-300 border border-slate-700">
-                        {repo.default_branch}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      {repo.is_private ? (
-                        <span className="flex items-center gap-1 text-amber-400">
-                          <Lock className="w-3 h-3" /> Private
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-slate-400">
-                          <Globe className="w-3 h-3" /> Public
-                        </span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium ${
-                          repo.is_indexed
-                            ? 'bg-emerald-950 text-emerald-400 border border-emerald-800/60'
-                            : 'bg-slate-800 text-slate-400 border border-slate-700'
-                        }`}
-                      >
-                        {repo.indexing_status.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-400">
-                      {repo.total_files} files / {repo.total_chunks} chunks
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Disconnect ${repo.full_name}? Indexed data in CodeLens will be deleted. The GitHub repository is not affected.`)) {
-                            disconnectMutation.mutate(repo.id);
-                          }
-                        }}
-                        disabled={disconnectMutation.isPending}
-                        title="Disconnect repository"
-                        className="p-1.5 rounded-md hover:bg-rose-950/40 text-slate-400 hover:text-rose-400 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
+                  <RepositoryRow
+                    key={repo.id}
+                    repo={repo}
+                    disconnecting={disconnectMutation.isPending}
+                    onDisconnect={(r) => {
+                      if (window.confirm(`Disconnect ${r.full_name}? Indexed data in CodeLens will be deleted. The GitHub repository is not affected.`)) {
+                        disconnectMutation.mutate(r.id);
+                      }
+                    }}
+                  />
                 ))}
               </tbody>
             </table>

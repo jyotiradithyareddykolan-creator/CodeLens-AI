@@ -141,6 +141,10 @@ class Settings(BaseSettings):
     # Repository discovery limits (protect workers from pathological repositories)
     INDEX_MAX_CANDIDATE_FILES: int = 50_000
     INDEX_MAX_TREE_REQUESTS: int = 2_000
+    # Indexing jobs
+    INDEX_MAX_ATTEMPTS: int = 5  # automatic retries for rate limits / transient failures
+    INDEX_STALE_JOB_MINUTES: int = 30  # active job without progress for this long is abandoned
+    INDEX_FETCH_CONCURRENCY: int = 8  # parallel blob downloads per job
 
     # Processing Limits
     MAX_FILE_SIZE_BYTES: int = 1024 * 1024  # 1 MB

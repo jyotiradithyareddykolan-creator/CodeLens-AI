@@ -32,6 +32,10 @@ class IndexedFile(Base, TimestampMixin):
     commit_sha: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     line_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
     has_parse_errors: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"), nullable=False)
+    # Set when the file was excluded after content screening (secret detected, binary,
+    # generated, ...). Excluded files have no chunks/symbols; the row remembers the
+    # blob so unchanged excluded files are not downloaded again.
+    skip_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # Relationships
     repository: Mapped["Repository"] = relationship("Repository", back_populates="indexed_files")

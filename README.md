@@ -111,17 +111,30 @@ uvicorn app.main:app --reload --port 8000
 ```
 
 #### 2. Celery Worker (in a separate terminal)
+Indexing runs in the worker; the API only queues jobs. Redis must be running.
 ```bash
 cd backend
 venv\Scripts\activate
-celery -A app.workers.celery_app worker --loglevel=info
+# Windows needs the solo pool (Celery's default prefork pool is not supported on Windows)
+celery -A app.workers.celery_app worker --loglevel=info --pool=solo
 ```
 
 #### 3. Frontend Setup (in a separate terminal)
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev        # development server
+npm test           # Vitest component tests
+npm run build      # type-check + production build
+```
+
+#### Local end-to-end check (optional)
+`backend/scripts/e2e_local.py` runs the real API, a real Celery worker, Redis and
+PostgreSQL + pgvector, with GitHub and Gemini replaced by a local HTTP server serving
+this project's own source. It wipes the disposable `codelens_test` database.
+```bash
+cd backend
+venv\Scripts\python scripts\e2e_local.py
 ```
 
 #### Live PostgreSQL tests (optional)
@@ -175,13 +188,71 @@ Other members of the same organization do not see it yet.
 
 ---
 
+## Repository indexing (Phase 3)
+
+```
+POST /repositories/{id}/index ──► indexing_jobs (queued) ──► Redis ──► Celery worker
+                                                                         │
+  resolve branch → commit SHA (pinned)                                   │
+  list tree at commit (truncated trees walked per directory)             │
+  path filters: language, vendor/build dirs, credential files, size      │
+  fetch only new/changed blobs → binary/generated/minified checks        │
+  secret scan (file excluded on any finding; values never logged)        │
+  Tree-sitter parse (symbols, imports, exports)                          │
+  syntax-aware chunks (exact bytes + 1-based lines)                      │
+  Gemini embeddings for unseen texts (saved per batch)                   │
+  one transaction: files, symbols, chunks, dependencies, job result ◄────┘
+```
+
+* **Incremental:** files are compared by Git blob SHA; unchanged files are not
+  downloaded, parsed or embedded again. Push webhooks to the default branch queue an
+  incremental job pinned to the pushed commit.
+* **Safe retries:** GitHub/Gemini rate limits and transient failures re-queue the job
+  with a delay (up to `INDEX_MAX_ATTEMPTS`); embeddings already generated are reused.
+  A failed job never damages the previously indexed snapshot.
+* **One job at a time per repository** (database-enforced); a job whose worker stops
+  reporting progress for `INDEX_STALE_JOB_MINUTES` is abandoned so a new one can start.
+* **Without `GEMINI_API_KEY`** files are still parsed and chunked; embeddings are
+  reported as skipped and filled in by the next run once a key is configured.
+
+### Indexing API (all require sign-in and repository ownership)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/api/v1/repositories/{id}/index` | Start (incremental) indexing; returns the active job if one exists |
+| POST | `/api/v1/repositories/{id}/reindex` | Re-process every file |
+| POST | `/api/v1/repositories/{id}/index/jobs/{job_id}/retry` | Retry a failed job |
+| GET | `/api/v1/repositories/{id}/index/status` | Status, last commit, counts, active/latest job |
+| GET | `/api/v1/repositories/{id}/index/jobs` | Job history |
+| GET | `/api/v1/repositories/{id}/index/stats` | Languages, chunk types, symbols, embeddings, dependencies |
+| GET | `/api/v1/repositories/{id}/index/files` | Indexed files (`?q=` path filter) |
+| GET | `/api/v1/repositories/{id}/index/files/{file_id}/chunks` | Chunks of a file with line ranges |
+| GET | `/api/v1/repositories/{id}/symbols` | Symbols (`?q=`, `?kind=`) |
+| GET | `/api/v1/repositories/{id}/search?q=` | Vector similarity search (needs `GEMINI_API_KEY`) |
+
+### Celery tasks
+
+| Task | Trigger |
+|---|---|
+| `app.workers.tasks.index_repository(job_id)` | Indexing API |
+| `app.workers.tasks.incremental_reindex(repository_id, commit_sha)` | Push webhook on the default branch |
+| `app.workers.tasks.analyze_pull_request` | Not implemented yet (Phase 5) |
+
+### Gemini embeddings
+Default model `gemini-embedding-2` at 768 dimensions (verified against Google's docs in
+Nov 2026; `gemini-embedding-001` is also supported). Put `GEMINI_API_KEY` in `.env`
+yourself. Indexing sends source code to the Gemini API: check Google's terms for the
+tier you use before indexing private code. To compare the token estimator with real
+usage: `venv\Scripts\python -m app.indexing.calibrate --sample 40`.
+
+---
+
 ## Current Status
 
-**Phase 1 (Foundation)** and **Phase 2 (GitHub integration)** are in place, including
-Milestone 0 stabilization: GitHub App installation linking, server-verified repository
-connection, authenticated and user-scoped repository APIs, OAuth `state` protection,
-production configuration guards, and migrations reconciled with the models (guarded by
-an `alembic check` test).
+**Phases 1–3 are implemented**: foundation, GitHub App integration (sign-in,
+installations, read-only repository access, webhooks) and the repository indexing
+engine (discovery, secret screening, Tree-sitter parsing, syntax-aware chunking, Gemini
+embeddings, PostgreSQL/pgvector persistence, Celery pipeline, indexing UI).
 
-**Next: Phase 3 (Repository indexing engine).** Indexing, parsing, embeddings,
-search, PR analysis and impact analysis are not implemented yet.
+**Next:** Phase 4 (repository-aware RAG chat), Phase 5 (automated PR analysis),
+Phase 6 (dependency graph and impact analysis).

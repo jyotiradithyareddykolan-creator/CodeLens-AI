@@ -15,11 +15,10 @@ def test_celery_task_registration():
 
 
 def test_missing_phase_tasks_are_explicitly_reported():
-    assert missing_application_tasks() == {
-        INDEX_REPOSITORY_TASK_NAME,
-        INCREMENTAL_REINDEX_TASK_NAME,
-        ANALYZE_PULL_REQUEST_TASK_NAME,
-    }
+    # Indexing tasks are implemented (Phase 3); PR analysis arrives in Phase 5.
+    assert missing_application_tasks() == {ANALYZE_PULL_REQUEST_TASK_NAME}
+    assert INDEX_REPOSITORY_TASK_NAME not in missing_application_tasks()
+    assert INCREMENTAL_REINDEX_TASK_NAME not in missing_application_tasks()
 
 
 def test_ping_task_execution():

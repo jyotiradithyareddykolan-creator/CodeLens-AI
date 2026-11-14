@@ -1,6 +1,7 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { healthApi } from '../services/api';
+import { healthApi, repositoryApi } from '../services/api';
+import { useAuth } from '../hooks/useAuth';
 import {
   GitBranch,
   FileCode,
@@ -18,11 +19,21 @@ export const OverviewPage: React.FC = () => {
     queryFn: healthApi.getHealth,
   });
 
+  const { isAuthenticated } = useAuth();
+  const { data: repositories } = useQuery({
+    queryKey: ['repositories'],
+    queryFn: repositoryApi.getRepositories,
+    enabled: isAuthenticated,
+  });
+  const signedIn = (value: number | undefined) => (isAuthenticated && value !== undefined ? String(value) : '—');
+  const indexedFiles = repositories?.reduce((sum, r) => sum + r.total_files, 0);
+
+  // Pull request analysis arrives in Phase 5; until then those tiles show "—".
   const stats = [
-    { name: 'Connected Repositories', value: '0', icon: GitBranch, color: 'text-blue-400' },
-    { name: 'Indexed Source Files', value: '0', icon: FileCode, color: 'text-emerald-400' },
-    { name: 'Analyzed Pull Requests', value: '0', icon: GitPullRequest, color: 'text-purple-400' },
-    { name: 'Potential Issues Detected', value: '0', icon: AlertTriangle, color: 'text-amber-400' },
+    { name: 'Connected Repositories', value: signedIn(repositories?.length), icon: GitBranch, color: 'text-blue-400' },
+    { name: 'Indexed Source Files', value: signedIn(indexedFiles), icon: FileCode, color: 'text-emerald-400' },
+    { name: 'Analyzed Pull Requests', value: '—', icon: GitPullRequest, color: 'text-purple-400' },
+    { name: 'Potential Issues Detected', value: '—', icon: AlertTriangle, color: 'text-amber-400' },
   ];
 
   return (

@@ -59,6 +59,17 @@ class FileIndexData:
 
 
 @dataclass
+class SkippedFile:
+    """A file excluded after content screening (kept to avoid re-downloading it)."""
+
+    path: str
+    blob_sha: str
+    language: str
+    size_bytes: int
+    reason: str
+
+
+@dataclass
 class SnapshotResult:
     files_total: int
     chunks_total: int
@@ -216,7 +227,8 @@ async def _insert(session: AsyncSession, model, rows: List[dict]) -> None:
 async def refresh_dependency_targets(session: AsyncSession, repository_id: uuid.UUID) -> int:
     """Re-resolve every import of the repository against its current file paths."""
     paths = (
-        await session.execute(select(IndexedFile.file_path).where(IndexedFile.repository_id == repository_id))
+        await session.execute(select(IndexedFile.file_path).where(
+            IndexedFile.repository_id == repository_id, IndexedFile.skip_reason.is_(None)))
     ).scalars().all()
     index = PathIndex(paths)
     rows = (
@@ -236,7 +248,8 @@ async def refresh_dependency_targets(session: AsyncSession, repository_id: uuid.
         await session.execute(update(Dependency), list(batch))
     target_id = (
         select(IndexedFile.id)
-        .where(IndexedFile.repository_id == Dependency.repository_id, IndexedFile.file_path == Dependency.target_path)
+        .where(IndexedFile.repository_id == Dependency.repository_id, IndexedFile.file_path == Dependency.target_path,
+               IndexedFile.skip_reason.is_(None))
         .scalar_subquery()
     )
     await session.execute(
@@ -251,6 +264,7 @@ async def apply_snapshot(
     commit_sha: str,
     upserts: Sequence[FileIndexData],
     deleted_paths: Sequence[str],
+    skipped: Sequence[SkippedFile] = (),
 ) -> SnapshotResult:
     """Move the repository's index to ``commit_sha``. Does not commit."""
     repo = (
@@ -286,6 +300,22 @@ async def apply_snapshot(
         record.line_count = data.parse.line_count
         record.has_parse_errors = data.parse.has_errors
         record.is_deleted = False
+        record.skip_reason = None
+    for item in skipped:
+        record = files.get(item.path)
+        if record is None:
+            record = IndexedFile(repository_id=repository_id, file_path=item.path, language=item.language,
+                                 size_bytes=item.size_bytes, file_hash=item.blob_sha)
+            session.add(record)
+            files[item.path] = record
+        else:
+            changed_ids.append(record.id)
+        record.language = item.language
+        record.size_bytes = item.size_bytes
+        record.file_hash = item.blob_sha
+        record.line_count = 0
+        record.has_parse_errors = False
+        record.skip_reason = item.reason
     await session.flush()
     await _delete_file_rows(session, changed_ids)
 
@@ -317,7 +347,8 @@ async def apply_snapshot(
     )
 
     files_total = (await session.execute(
-        select(func.count()).select_from(IndexedFile).where(IndexedFile.repository_id == repository_id)
+        select(func.count()).select_from(IndexedFile).where(
+            IndexedFile.repository_id == repository_id, IndexedFile.skip_reason.is_(None))
     )).scalar_one()
     chunks_total = (await session.execute(
         select(func.count()).select_from(CodeChunk).where(CodeChunk.repository_id == repository_id)

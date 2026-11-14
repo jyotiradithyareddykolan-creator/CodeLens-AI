@@ -7,6 +7,10 @@ import {
   CurrentUserResponse,
   InstallationList,
   InstallationRepository,
+  IndexingJob,
+  IndexingStatus,
+  IndexedFileInfo,
+  ChunkInfo,
 } from '../types';
 
 const TOKEN_STORAGE_KEY = 'codelens_session_token';
@@ -122,6 +126,39 @@ export const repositoryApi = {
   },
   getRepositoryStatus: async (id: string): Promise<any> => {
     const res = await api.get(`/api/repositories/${id}/status`);
+    return res.data;
+  },
+};
+
+export const indexingApi = {
+  start: async (repoId: string, forceFull = false): Promise<IndexingJob> => {
+    const res = await api.post<IndexingJob>(`/api/repositories/${repoId}/index`, { force_full: forceFull });
+    return res.data;
+  },
+  reindex: async (repoId: string): Promise<IndexingJob> => {
+    const res = await api.post<IndexingJob>(`/api/repositories/${repoId}/reindex`);
+    return res.data;
+  },
+  retry: async (repoId: string, jobId: string): Promise<IndexingJob> => {
+    const res = await api.post<IndexingJob>(`/api/repositories/${repoId}/index/jobs/${jobId}/retry`);
+    return res.data;
+  },
+  status: async (repoId: string): Promise<IndexingStatus> => {
+    const res = await api.get<IndexingStatus>(`/api/repositories/${repoId}/index/status`);
+    return res.data;
+  },
+  jobs: async (repoId: string, limit = 10): Promise<IndexingJob[]> => {
+    const res = await api.get<IndexingJob[]>(`/api/repositories/${repoId}/index/jobs`, { params: { limit } });
+    return res.data;
+  },
+  files: async (repoId: string, q?: string): Promise<IndexedFileInfo[]> => {
+    const res = await api.get<IndexedFileInfo[]>(`/api/repositories/${repoId}/index/files`, {
+      params: q ? { q } : {},
+    });
+    return res.data;
+  },
+  chunks: async (repoId: string, fileId: string): Promise<ChunkInfo[]> => {
+    const res = await api.get<ChunkInfo[]>(`/api/repositories/${repoId}/index/files/${fileId}/chunks`);
     return res.data;
   },
 };

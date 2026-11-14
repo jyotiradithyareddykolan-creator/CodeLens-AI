@@ -90,3 +90,77 @@ export interface InstallationRepository {
   html_url?: string | null;
   connected_repository_id?: string | null;
 }
+
+export type IndexingJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
+
+export interface IndexingJob {
+  id: string;
+  repository_id: string;
+  status: IndexingJobStatus;
+  trigger: string;
+  phase?: string | null;
+  progress: number;
+  commit_sha?: string | null;
+  base_commit_sha?: string | null;
+  force_full: boolean;
+  attempts: number;
+  files_total: number;
+  files_changed: number;
+  files_processed: number;
+  files_indexed: number;
+  files_skipped: number;
+  files_failed: number;
+  files_deleted: number;
+  chunks_total: number;
+  embeddings_created: number;
+  embeddings_reused: number;
+  stats?: Record<string, unknown> | null;
+  error_message?: string | null;
+  next_retry_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IndexingStatus {
+  repository_id: string;
+  indexing_status: Repository['indexing_status'];
+  is_indexed: boolean;
+  last_indexed_commit?: string | null;
+  last_indexed_at?: string | null;
+  total_files: number;
+  total_chunks: number;
+  embeddings_enabled: boolean;
+  active_job?: IndexingJob | null;
+  latest_job?: IndexingJob | null;
+}
+
+export interface IndexedFileInfo {
+  id: string;
+  file_path: string;
+  language: string;
+  size_bytes: number;
+  line_count: number;
+  has_parse_errors: boolean;
+  commit_sha?: string | null;
+  chunk_count: number;
+}
+
+export interface ChunkInfo {
+  id: string;
+  chunk_type: string;
+  symbol_name?: string | null;
+  qualified_name?: string | null;
+  parent_symbol?: string | null;
+  start_line: number;
+  end_line: number;
+  start_byte: number;
+  end_byte: number;
+  token_count: number;
+  part_index: number;
+  part_count: number;
+  has_embedding: boolean;
+  commit_sha: string;
+  content: string;
+}
