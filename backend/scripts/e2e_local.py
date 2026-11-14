@@ -40,12 +40,23 @@ def git_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
+INDEXABLE = (".py", ".ts", ".tsx")
+
+
 def load_project_snapshot() -> dict:
+    """This project's source as the served repository. Works from a full checkout and
+    from the backend-only Docker image (where frontend/ is absent)."""
     files = {}
-    for base, suffixes in (("backend/app", (".py",)), ("frontend/src", (".ts", ".tsx"))):
-        for path in sorted((REPO_ROOT / base).rglob("*")):
+    sources = (
+        (BACKEND / "app", "backend/app", (".py",)),
+        (REPO_ROOT / "frontend" / "src", "frontend/src", (".ts", ".tsx")),
+    )
+    for base, prefix, suffixes in sources:
+        if not base.is_dir():
+            continue
+        for path in sorted(base.rglob("*")):
             if path.suffix in suffixes and "__pycache__" not in path.parts and ".test." not in path.name:
-                files[path.relative_to(REPO_ROOT).as_posix()] = path.read_bytes()
+                files[f"{prefix}/{path.relative_to(base).as_posix()}"] = path.read_bytes()
     files["README.md"] = b"# not indexed\n"
     files["config/.env"] = b"SECRET=1\n"
     return files
@@ -173,7 +184,7 @@ async def wait_for_job(client, headers, repo_id, timeout=300):
     raise TimeoutError("indexing did not finish in time")
 
 
-async def scenario(remote: FakeRemote, commit_files: list) -> dict:
+async def scenario(remote: FakeRemote, commit_files: list, expected_deleted: int) -> dict:
     import httpx
 
     from app.core.security import create_access_token
@@ -204,7 +215,7 @@ async def scenario(remote: FakeRemote, commit_files: list) -> dict:
         status = await wait_for_job(client, headers, repo_id)
         job = status["latest_job"]
         assert job["status"] == "succeeded", job
-        assert status["total_files"] > 50 and status["total_chunks"] > 100 and job["embeddings_created"] > 0
+        assert status["total_files"] > 40 and status["total_chunks"] > 100 and job["embeddings_created"] > 0
         report["initial"] = {k: job[k] for k in ("files_total", "files_indexed", "files_skipped", "chunks_total",
                                                   "embeddings_created", "embeddings_reused")}
         report["initial"]["skipped_by_reason"] = job["stats"]["skipped_by_reason"]
@@ -252,7 +263,7 @@ async def scenario(remote: FakeRemote, commit_files: list) -> dict:
             await asyncio.sleep(1.5)
         job = push_jobs[0]
         assert job["status"] == "succeeded" and job["commit_sha"] == head, job
-        assert (job["files_changed"], job["files_deleted"]) == (2, 2), job  # 1 changed + 1 added; 2 removed
+        assert (job["files_changed"], job["files_deleted"]) == (2, expected_deleted), job  # 1 changed + 1 added
         report["incremental_push"] = {
             "files_changed": job["files_changed"], "files_deleted": job["files_deleted"],
             "blob_downloads": remote.calls["blobs"] - blobs_before,
@@ -282,8 +293,10 @@ def main() -> int:
     changed = "backend/app/indexing/tokens.py"
     v2[changed] = v1[changed] + b"\n\ndef e2e_marker():\n    return 'changed'\n"
     v2.pop("frontend/src/vite-env.d.ts", None)
-    removed = next(p for p in v1 if p.startswith("frontend/src/pages/") and p.endswith(".tsx"))
+    removed = next((p for p in v1 if p.startswith("frontend/src/pages/") and p.endswith(".tsx")),
+                   "backend/app/schemas/chat.py")
     v2.pop(removed)
+    expected_deleted = sum(1 for p in set(v1) - set(v2) if p.endswith(INDEXABLE))
     v2["backend/app/e2e_added.py"] = b"def added_in_second_commit():\n    return 2\n"
     remote.add_commit(v1)
 
@@ -312,7 +325,7 @@ def main() -> int:
         try:
             time.sleep(4)
             assert worker.poll() is None, worker.stdout.read()
-            report = asyncio.run(scenario(remote, [v1, v2]))
+            report = asyncio.run(scenario(remote, [v1, v2], expected_deleted))
         except BaseException:
             worker.terminate()
             print("---- worker output ----")

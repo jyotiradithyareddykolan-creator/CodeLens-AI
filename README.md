@@ -71,11 +71,20 @@ codelens-ai/
    ```bash
    cp .env.example .env
    ```
-2. Start all services (PostgreSQL + pgvector, Redis, FastAPI, Celery, React):
+2. Make the GitHub App private key available to the containers. A host path such as
+   `C:\Users\you\keys\app.pem` does not exist inside Linux containers, so Compose mounts the
+   file read-only at `/run/secrets/github-app.pem` and points `GITHUB_PRIVATE_KEY_PATH` there.
+   Either copy the key to `./secrets/github-app.pem` (git-ignored), or set its host path in `.env`:
    ```bash
-   docker-compose up --build
+   GITHUB_PRIVATE_KEY_FILE=C:/Users/you/keys/app.pem
    ```
-3. Access services:
+   (Compose overrides the database, Redis and Celery URLs to the container hostnames, so the
+   `localhost` values in `.env` keep working for local, non-Docker development.)
+3. Start all services (PostgreSQL + pgvector, Redis, FastAPI, Celery, React):
+   ```bash
+   docker compose up --build
+   ```
+4. Access services:
    - **Frontend Dashboard**: [http://localhost:5173](http://localhost:5173)
    - **FastAPI OpenAPI Docs**: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)
    - **Liveness Health Check**: [http://localhost:8000/health](http://localhost:8000/health)

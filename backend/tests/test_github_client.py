@@ -231,3 +231,31 @@ async def test_pagination_follows_link_header():
     repos = await svc.list_installation_repositories(1)
     assert len(repos) == 101
     assert [r.url.params["page"] for r in rec.requests] == ["1", "2"]
+
+
+def test_missing_key_file_mounted_as_directory_reports_missing_credentials(tmp_path, monkeypatch):
+    """Docker turns a bind mount of a missing host file into an empty directory."""
+    mount = tmp_path / "github-app.pem"
+    mount.mkdir()
+    monkeypatch.setattr(settings, "GITHUB_APP_ID", "123")
+    monkeypatch.setattr(settings, "GITHUB_PRIVATE_KEY", None)
+    monkeypatch.setattr(settings, "GITHUB_PRIVATE_KEY_PATH", str(mount))
+    with pytest.raises(GitHubServiceError) as exc:
+        GitHubService().create_app_jwt()
+    assert "credentials missing" in str(exc.value)
+
+
+def test_private_key_is_read_from_a_mounted_file(tmp_path, monkeypatch):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from jose import jwt as jose_jwt
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = tmp_path / "github-app.pem"
+    pem.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                      serialization.NoEncryption()))
+    monkeypatch.setattr(settings, "GITHUB_APP_ID", "123")
+    monkeypatch.setattr(settings, "GITHUB_PRIVATE_KEY", None)
+    monkeypatch.setattr(settings, "GITHUB_PRIVATE_KEY_PATH", str(pem))
+    token = GitHubService().create_app_jwt()
+    assert jose_jwt.get_unverified_claims(token)["iss"] == "123"

@@ -15,6 +15,12 @@ from app.indexing.parsing import parse_file
 from app.indexing.tokens import estimate_tokens
 
 REPO = Path(__file__).resolve().parents[2]
+# Some tests chunk the whole project (backend + frontend). The backend Docker image
+# contains only backend/, so those tests are skipped there instead of failing.
+FULL_CHECKOUT = (REPO / "backend" / "app").is_dir() and (REPO / "frontend" / "src").is_dir()
+needs_full_checkout = pytest.mark.skipif(
+    not FULL_CHECKOUT, reason="full repository checkout not available (e.g. backend-only Docker image)"
+)
 COMMIT = "a" * 40
 REPO_ID = uuid.UUID("11111111-2222-3333-4444-555555555555")
 
@@ -502,6 +508,7 @@ def _repo_sources():
                 yield path
 
 
+@needs_full_checkout
 @pytest.mark.parametrize("max_tokens", [500, 96, 64])
 def test_chunks_this_projects_own_source(max_tokens):
     """Every project file chunks with exact coverage at the default and a tiny limit."""
@@ -523,6 +530,7 @@ def test_several_declarations_on_one_line_are_not_lost_or_duplicated():
     assert all(c.start_line == 1 for c in chunks if c.qualified_name in {"a", "b", "C"})
 
 
+@needs_full_checkout
 @pytest.mark.parametrize("max_tokens", [500, 64])
 def test_randomly_corrupted_project_files_still_chunk_exactly(max_tokens):
     """Mutation stress test: deleting random lines creates malformed syntax everywhere."""

@@ -203,7 +203,8 @@ class GitHubService:
         if settings.GITHUB_PRIVATE_KEY:
             return settings.GITHUB_PRIVATE_KEY
 
-        if settings.GITHUB_PRIVATE_KEY_PATH and os.path.exists(settings.GITHUB_PRIVATE_KEY_PATH):
+        # isfile, not exists: a Docker bind mount of a missing host file appears as a directory.
+        if settings.GITHUB_PRIVATE_KEY_PATH and os.path.isfile(settings.GITHUB_PRIVATE_KEY_PATH):
             with open(settings.GITHUB_PRIVATE_KEY_PATH, "r", encoding="utf-8") as f:
                 return f.read()
 
