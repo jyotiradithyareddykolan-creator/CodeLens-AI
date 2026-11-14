@@ -105,10 +105,11 @@ async def test_start_indexing_creates_and_dispatches_one_job(client: AsyncClient
     assert (job["status"], job["trigger"], job["force_full"], job["progress"]) == ("queued", "manual", False, 0.0)
     assert dispatched == [uuid.UUID(job["id"])]
 
-    # A second request while the job is active returns the same job without dispatching again.
+    # A second request while the job is still queued returns the same job and re-sends it
+    # (its task message may have been lost); workers claim jobs atomically, so this is safe.
     second = await client.post(f"/api/repositories/{repo.id}/index", headers=headers, json={"force_full": True})
     assert second.status_code == 200 and second.json()["id"] == job["id"]
-    assert len(dispatched) == 1
+    assert dispatched == [uuid.UUID(job["id"])] * 2
 
     status_ = (await client.get(f"/api/repositories/{repo.id}/index/status", headers=headers)).json()
     assert status_["active_job"]["id"] == job["id"]
@@ -225,3 +226,29 @@ async def test_disconnect_removes_index_and_jobs(client: AsyncClient, db_session
     assert (await client.delete(f"/api/repositories/{repo.id}", headers=headers)).status_code == 200
     assert (await db_session.execute(select(IndexingJob))).scalars().all() == []
     assert (await client.get(f"/api/repositories/{repo.id}/index/status", headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_running_or_retry_scheduled_jobs_are_not_redispatched(client: AsyncClient, db_session, dispatched):
+    from datetime import timedelta
+
+    from app.indexing.jobs import utcnow
+
+    repo, headers = await setup(db_session)
+    job = IndexingJob(repository_id=repo.id, status="running", heartbeat_at=utcnow())
+    db_session.add(job)
+    await db_session.commit()
+    response = await client.post(f"/api/repositories/{repo.id}/index", headers=headers)
+    assert response.status_code == 200 and response.json()["id"] == str(job.id)
+    assert dispatched == []
+
+    job.status = "queued"
+    job.next_retry_at = utcnow() + timedelta(minutes=5)
+    await db_session.commit()
+    await client.post(f"/api/repositories/{repo.id}/index", headers=headers)
+    assert dispatched == []  # waits for its scheduled Celery retry
+
+    job.next_retry_at = utcnow() - timedelta(minutes=1)
+    await db_session.commit()
+    await client.post(f"/api/repositories/{repo.id}/index", headers=headers)
+    assert dispatched == [job.id]  # retry time passed without a worker picking it up

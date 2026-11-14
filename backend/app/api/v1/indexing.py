@@ -50,7 +50,9 @@ async def _start(db: AsyncSession, user: User, repo_id: uuid.UUID, response: Res
     job, created = await job_service.request_indexing(db, repo, trigger=trigger, force_full=force_full)
     if not created:
         response.status_code = status.HTTP_200_OK
-        return IndexingJobResponse.model_validate(job)
+        if not job_service.needs_redispatch(job):
+            return IndexingJobResponse.model_validate(job)
+        # Re-send a queued job whose task message may have been lost.
     try:
         job.celery_task_id = job_service.dispatch_index_job(job.id)
         await db.commit()

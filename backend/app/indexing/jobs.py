@@ -101,6 +101,17 @@ async def request_indexing(
     return job, True
 
 
+def needs_redispatch(job: IndexingJob, now: Optional[datetime] = None) -> bool:
+    """A queued job whose task message may have been lost (broker restart, worker
+    outage, misconfigured broker) can safely be sent again: workers claim jobs
+    atomically, so a duplicate message is skipped. Jobs waiting for a scheduled retry
+    are left alone until their retry time."""
+    if job.status != "queued":
+        return False
+    retry_at = _aware(job.next_retry_at)
+    return retry_at is None or retry_at <= (now or utcnow())
+
+
 def dispatch_index_job(job_id: uuid.UUID) -> str:
     """Send the job to Celery. Returns the Celery task ID."""
     from app.workers.celery_app import INDEX_REPOSITORY_TASK_NAME, celery_app
