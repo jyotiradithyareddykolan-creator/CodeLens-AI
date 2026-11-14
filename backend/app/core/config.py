@@ -85,9 +85,41 @@ class Settings(BaseSettings):
 
     # AI & Embeddings (Gemini)
     GEMINI_API_KEY: Optional[str] = None
-    GEMINI_EMBEDDING_MODEL: str = "models/text-embedding-004"
+    GEMINI_API_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
+    # Verified against Google's model and deprecation pages (Nov 2026):
+    # gemini-embedding-2 is current; gemini-embedding-001 remains available until
+    # 2028-05-14; text-embedding-004 was shut down on 2026-01-14.
+    GEMINI_EMBEDDING_MODEL: str = "gemini-embedding-2"
+    # Recommended values: 768, 1536, 3072 (supported 128-3072). pgvector HNSW indexes
+    # support up to 2000 dimensions. Changing this requires re-indexing.
     GEMINI_EMBEDDING_DIMENSIONS: int = 768
-    GEMINI_LLM_MODEL: str = "gemini-1.5-flash"
+    # Texts per batchEmbedContents call.
+    GEMINI_EMBEDDING_BATCH_SIZE: int = 100
+    GEMINI_TIMEOUT_SECONDS: float = 60.0
+    GEMINI_MAX_RETRIES: int = 5
+    GEMINI_MAX_RETRY_WAIT_SECONDS: float = 120.0
+    # Generation model for Phase 4 (RAG). Not used yet; chosen and verified then.
+    GEMINI_LLM_MODEL: Optional[str] = None
+
+    @field_validator("GEMINI_EMBEDDING_MODEL")
+    @classmethod
+    def strip_model_prefix(cls, v: str) -> str:
+        v = v.strip()
+        return v[len("models/"):] if v.startswith("models/") else v
+
+    @field_validator("GEMINI_EMBEDDING_DIMENSIONS")
+    @classmethod
+    def embedding_dimensions_in_range(cls, v: int) -> int:
+        if not 128 <= v <= 3072:
+            raise ValueError("GEMINI_EMBEDDING_DIMENSIONS must be between 128 and 3072")
+        return v
+
+    @field_validator("GEMINI_EMBEDDING_BATCH_SIZE")
+    @classmethod
+    def batch_size_in_range(cls, v: int) -> int:
+        if not 1 <= v <= 250:
+            raise ValueError("GEMINI_EMBEDDING_BATCH_SIZE must be between 1 and 250")
+        return v
 
     # GitHub App Integration
     GITHUB_APP_ID: Optional[str] = None
