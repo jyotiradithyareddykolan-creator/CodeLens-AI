@@ -99,6 +99,17 @@ class Settings(BaseSettings):
     GITHUB_PRIVATE_KEY_PATH: Optional[str] = None
     GITHUB_PRIVATE_KEY: Optional[str] = None
 
+    # GitHub API client behaviour
+    GITHUB_API_URL: str = "https://api.github.com"
+    GITHUB_TIMEOUT_SECONDS: float = 30.0
+    GITHUB_MAX_RETRIES: int = 4
+    # Longest single wait for a rate-limit reset / Retry-After before giving up.
+    GITHUB_MAX_RETRY_WAIT_SECONDS: float = 120.0
+
+    # Repository discovery limits (protect workers from pathological repositories)
+    INDEX_MAX_CANDIDATE_FILES: int = 50_000
+    INDEX_MAX_TREE_REQUESTS: int = 2_000
+
     # Processing Limits
     MAX_FILE_SIZE_BYTES: int = 1024 * 1024  # 1 MB
     CHUNK_MAX_TOKENS: int = 500
