@@ -105,15 +105,16 @@ async def test_start_indexing_creates_and_dispatches_one_job(client: AsyncClient
     assert (job["status"], job["trigger"], job["force_full"], job["progress"]) == ("queued", "manual", False, 0.0)
     assert dispatched == [uuid.UUID(job["id"])]
 
-    # A second request while the job is still queued returns the same job and re-sends it
-    # (its task message may have been lost); workers claim jobs atomically, so this is safe.
+    # A second request right away returns the same job without re-sending it
+    # (normal pick-up latency; repeated clicks never create jobs or message storms).
     second = await client.post(f"/api/repositories/{repo.id}/index", headers=headers, json={"force_full": True})
     assert second.status_code == 200 and second.json()["id"] == job["id"]
-    assert dispatched == [uuid.UUID(job["id"])] * 2
+    assert dispatched == [uuid.UUID(job["id"])]
 
     status_ = (await client.get(f"/api/repositories/{repo.id}/index/status", headers=headers)).json()
     assert status_["active_job"]["id"] == job["id"]
     assert status_["indexing_status"] == "pending"
+    assert len((await client.get(f"/api/repositories/{repo.id}/index/jobs", headers=headers)).json()) == 1
     stored = (await db_session.execute(select(IndexingJob).where(IndexingJob.id == uuid.UUID(job["id"])))).scalar_one()
     assert stored.celery_task_id == f"celery-{job['id']}"
 
@@ -249,6 +250,28 @@ async def test_running_or_retry_scheduled_jobs_are_not_redispatched(client: Asyn
     assert dispatched == []  # waits for its scheduled Celery retry
 
     job.next_retry_at = utcnow() - timedelta(minutes=1)
+    job.updated_at = utcnow() - timedelta(minutes=2)
     await db_session.commit()
     await client.post(f"/api/repositories/{repo.id}/index", headers=headers)
     assert dispatched == [job.id]  # retry time passed without a worker picking it up
+
+
+@pytest.mark.asyncio
+async def test_stuck_queued_job_is_resent_once_per_window(client: AsyncClient, db_session, dispatched):
+    from datetime import timedelta
+
+    from app.indexing.jobs import RESEND_AFTER_SECONDS, utcnow
+
+    repo, headers = await setup(db_session)
+    job = IndexingJob(repository_id=repo.id, status="queued")
+    db_session.add(job)
+    await db_session.commit()
+    job.updated_at = utcnow() - timedelta(seconds=RESEND_AFTER_SECONDS + 5)
+    await db_session.commit()
+
+    for _ in range(3):  # rapid repeated clicks
+        response = await client.post(f"/api/repositories/{repo.id}/index", headers=headers)
+        assert response.status_code == 200 and response.json()["id"] == str(job.id)
+    assert dispatched == [job.id]  # re-sent once; the re-send restarts the window
+    jobs = (await db_session.execute(select(IndexingJob).where(IndexingJob.repository_id == repo.id))).scalars().all()
+    assert len(jobs) == 1  # never a duplicate job

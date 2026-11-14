@@ -101,15 +101,27 @@ async def request_indexing(
     return job, True
 
 
+# A queued job untouched for this long is treated as possibly lost and may be re-sent.
+RESEND_AFTER_SECONDS = 30
+
+
 def needs_redispatch(job: IndexingJob, now: Optional[datetime] = None) -> bool:
     """A queued job whose task message may have been lost (broker restart, worker
     outage, misconfigured broker) can safely be sent again: workers claim jobs
-    atomically, so a duplicate message is skipped. Jobs waiting for a scheduled retry
-    are left alone until their retry time."""
+    atomically, so a duplicate message is skipped.
+
+    Not re-sent: jobs that are running or finished, jobs waiting for a scheduled retry
+    (until their retry time), and jobs queued or re-sent less than
+    ``RESEND_AFTER_SECONDS`` ago (normal pick-up latency; also rate-limits clicks).
+    """
     if job.status != "queued":
         return False
+    now = now or utcnow()
     retry_at = _aware(job.next_retry_at)
-    return retry_at is None or retry_at <= (now or utcnow())
+    if retry_at is not None and retry_at > now:
+        return False
+    last_change = _aware(job.updated_at) or _aware(job.created_at)
+    return last_change is None or now - last_change >= timedelta(seconds=RESEND_AFTER_SECONDS)
 
 
 def dispatch_index_job(job_id: uuid.UUID) -> str:

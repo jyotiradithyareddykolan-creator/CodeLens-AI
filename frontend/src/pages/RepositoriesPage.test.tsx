@@ -36,6 +36,8 @@ const repo: Repository = {
   created_at: '2026-11-14T10:00:00Z',
 };
 
+const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
+
 function renderPage() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -138,5 +140,54 @@ describe('RepositoriesPage indexing integration', () => {
     expect(await screen.findByText('L1–3 · ~12 tok · no embedding')).toBeTruthy();
     expect(screen.getByText(/def main\(\):/)).toBeTruthy();
     expect(api.chunks).toHaveBeenCalledWith('repo-1', 'f1');
+  });
+});
+
+describe('stuck queued jobs', () => {
+  it('offers Resend for a queued job that is not waiting for a retry', async () => {
+    api.getRepositories.mockResolvedValue([repo]);
+    api.status.mockResolvedValue(makeStatus({ indexing_status: 'pending', active_job: makeJob({ status: 'queued', progress: 0, updated_at: minutesAgo(2) }) }));
+    api.start.mockResolvedValue(makeJob({ status: 'queued' }));
+    renderPage();
+    const resend = await screen.findByRole('button', { name: /Resend/ });
+    expect((resend as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(resend);
+    await waitFor(() => expect(api.start).toHaveBeenCalledWith('repo-1'));
+  });
+
+  it('keeps actions disabled while a retry is scheduled', async () => {
+    api.getRepositories.mockResolvedValue([repo]);
+    api.status.mockResolvedValue(makeStatus({
+      indexing_status: 'pending',
+      active_job: makeJob({ status: 'queued', progress: 0, next_retry_at: '2026-11-14T10:05:00Z' }),
+    }));
+    renderPage();
+    expect(await screen.findByText(/Retrying at/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: /Index/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+describe('resend eligibility', () => {
+  it('does not offer Resend while a job was queued only moments ago', async () => {
+    api.getRepositories.mockResolvedValue([repo]);
+    api.status.mockResolvedValue(makeStatus({
+      indexing_status: 'pending',
+      active_job: makeJob({ status: 'queued', progress: 0, updated_at: new Date().toISOString() }),
+    }));
+    renderPage();
+    expect(await screen.findByText('Queued')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Resend/ })).toBeNull();
+    expect((screen.getByRole('button', { name: /Index/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it('keeps Reindex disabled while a stuck job can be resent', async () => {
+    const indexed = { ...repo, is_indexed: true, indexing_status: 'indexed' as const };
+    api.getRepositories.mockResolvedValue([indexed]);
+    api.status.mockResolvedValue(makeStatus({
+      indexing_status: 'indexed', is_indexed: true, active_job: makeJob({ status: 'queued', progress: 0, updated_at: minutesAgo(2) }),
+    }));
+    renderPage();
+    expect(((await screen.findByRole('button', { name: /Resend/ })) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole('button', { name: /Reindex/ }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
