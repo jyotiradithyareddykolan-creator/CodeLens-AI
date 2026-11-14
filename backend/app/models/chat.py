@@ -1,6 +1,6 @@
 import uuid
 from typing import Any, List, Optional
-from sqlalchemy import ForeignKey, JSON, String, Text
+from sqlalchemy import ForeignKey, Index, JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.session import Base
@@ -26,6 +26,10 @@ class Conversation(Base, TimestampMixin):
     user: Mapped["User"] = relationship("User", back_populates="conversations")
     messages: Mapped[List["Message"]] = relationship(
         "Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
+    )
+
+    __table_args__ = (
+        Index("ix_conversations_repo_user", "repository_id", "user_id"),
     )
 
 

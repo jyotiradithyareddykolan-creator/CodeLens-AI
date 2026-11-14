@@ -82,3 +82,14 @@ async def client():
 async def db_session():
     async with TestingAsyncSessionLocal() as session:
         yield session
+
+
+@pytest.fixture
+def session_factory():
+    """The test database's async session factory (for code that opens its own sessions)."""
+    return TestingAsyncSessionLocal
+
+
+@pytest.fixture
+def sqlite_session_factory():
+    return TestingAsyncSessionLocal

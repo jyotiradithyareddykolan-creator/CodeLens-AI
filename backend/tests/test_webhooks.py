@@ -177,3 +177,67 @@ async def test_pull_request_opened_webhook(client: AsyncClient, db_session: Asyn
     assert analysis is not None
     assert analysis.status == "pending"
     assert analysis.head_sha == "2222222222222222"
+
+
+def installation_payload(action: str, sender_id: int, installation_id: int = 5555):
+    return {
+        "action": action,
+        "installation": {
+            "id": installation_id,
+            "account": {"login": "octo-org", "type": "Organization"},
+            "permissions": {"contents": "read", "metadata": "read", "pull_requests": "read"},
+        },
+        "sender": {"id": sender_id, "login": "octo-dev"},
+    }
+
+
+async def post_event(client: AsyncClient, event: str, delivery: str, payload: dict):
+    return await client.post(
+        "/api/webhooks/github",
+        content=json.dumps(payload).encode("utf-8"),
+        headers={
+            "X-GitHub-Delivery": delivery,
+            "X-GitHub-Event": event,
+            "Content-Type": "application/json",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_installation_created_webhook_links_known_sender(
+    client: AsyncClient, db_session: AsyncSession
+):
+    user = User(github_id=31337, username="octo-dev")
+    db_session.add(user)
+    await db_session.commit()
+
+    resp = await post_event(client, "installation", "inst-created-1", installation_payload("created", 31337))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "processed"
+
+    inst = (
+        await db_session.execute(
+            select(GitHubInstallation).where(GitHubInstallation.installation_id == 5555)
+        )
+    ).scalar_one()
+    assert inst.user_id == user.id
+    assert inst.account_login == "octo-org"
+    assert inst.account_type == "Organization"
+    assert inst.permissions["contents"] == "read"
+
+    # installation.deleted removes it again.
+    resp = await post_event(client, "installation", "inst-deleted-1", installation_payload("deleted", 31337))
+    assert resp.json()["status"] == "processed"
+    db_session.expire_all()
+    remaining = (await db_session.execute(select(GitHubInstallation))).scalars().all()
+    assert remaining == []
+
+
+@pytest.mark.asyncio
+async def test_installation_created_webhook_defers_unknown_sender(
+    client: AsyncClient, db_session: AsyncSession
+):
+    resp = await post_event(client, "installation", "inst-created-2", installation_payload("created", 99))
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "processed"
+    assert (await db_session.execute(select(GitHubInstallation))).scalars().all() == []

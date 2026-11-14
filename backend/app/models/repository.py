@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.session import Base
@@ -47,6 +47,8 @@ class Repository(Base, TimestampMixin):
     pull_requests: Mapped[List["PullRequest"]] = relationship("PullRequest", back_populates="repository", cascade="all, delete-orphan")
     dependencies: Mapped[List["Dependency"]] = relationship("Dependency", back_populates="repository", cascade="all, delete-orphan")
     conversations: Mapped[List["Conversation"]] = relationship("Conversation", back_populates="repository", cascade="all, delete-orphan")
+    chunk_embeddings: Mapped[List["ChunkEmbedding"]] = relationship("ChunkEmbedding", back_populates="repository", cascade="all, delete-orphan")
+    indexing_jobs: Mapped[List["IndexingJob"]] = relationship("IndexingJob", back_populates="repository", cascade="all, delete-orphan", order_by="IndexingJob.created_at")
 
 
 class RepositoryBranch(Base, TimestampMixin):
@@ -83,3 +85,7 @@ class Commit(Base, TimestampMixin):
 
     # Relationships
     repository: Mapped["Repository"] = relationship("Repository", back_populates="commits")
+
+    __table_args__ = (
+        Index("ix_commits_repo_sha", "repository_id", "sha"),
+    )

@@ -55,3 +55,7 @@ def dispatch_registered_task(task_name: str, *args: object) -> bool:
         return False
     celery_app.send_task(task_name, args=list(args))
     return True
+
+
+# Register application tasks (imported last to avoid a circular import).
+import app.workers.tasks  # noqa: E402,F401

@@ -8,6 +8,7 @@ import { ChatPage } from './pages/ChatPage';
 import { PullRequestsPage } from './pages/PullRequestsPage';
 import { ImpactPage } from './pages/ImpactPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AuthCallbackPage } from './pages/AuthCallbackPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -31,6 +32,7 @@ export const App: React.FC = () => {
             <Route path="/impact" element={<ImpactPage />} />
             <Route path="/history" element={<PullRequestsPage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/auth/callback" element={<AuthCallbackPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>

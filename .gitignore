@@ -44,6 +44,9 @@ frontend/build/
 *.key
 *.cert
 
+# Docker-mounted secrets (see GITHUB_PRIVATE_KEY_FILE)
+secrets/
+
 # Database & Cache
 *.sqlite3
 *.db
@@ -56,3 +59,4 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+*.tsbuildinfo

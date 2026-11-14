@@ -2,7 +2,7 @@ from app.database.session import Base
 from app.models.user import User
 from app.models.github import GitHubInstallation, WebhookEvent
 from app.models.repository import Repository, RepositoryBranch, Commit
-from app.models.indexing import IndexedFile, CodeChunk, CodeSymbol, Dependency
+from app.models.indexing import ChunkEmbedding, CodeChunk, CodeSymbol, Dependency, IndexedFile, IndexingJob
 from app.models.pull_request import PullRequest, PRAnalysis, Finding, ImpactRelationship
 from app.models.chat import Conversation, Message
 from app.models.task import BackgroundTask
@@ -19,6 +19,8 @@ __all__ = [
     "CodeChunk",
     "CodeSymbol",
     "Dependency",
+    "ChunkEmbedding",
+    "IndexingJob",
     "PullRequest",
     "PRAnalysis",
     "Finding",
